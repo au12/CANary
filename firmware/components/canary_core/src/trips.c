@@ -41,11 +41,14 @@ void cn_json_findings(cn_engine *e, cn_jw *w)
         cn_jw_obj(w);
         cn_jw_kstr(w, "id", m->id);
         cn_jw_kstr(w, "title", m->title);
+        cn_jw_kstr(w, "headline", cn_monitor_headline(m));
         cn_jw_kstr(w, "category", m->category);
         cn_jw_kstr(w, "status", cn_sev_name(m->status));
         cn_jw_knum(w, "value", m->result, m->dec + 1);
         cn_jw_kstr(w, "unit", m->unit);
+        cn_jw_kint(w, "dec", m->dec);
         cn_jw_kstr(w, "text", text);
+        if (cn_monitor_template(m)) cn_jw_kstr(w, "tpl", cn_monitor_template(m)); /* lets a reader show its own units */
         cn_jw_end_obj(w);
     }
     cn_jw_end_arr(w);
@@ -60,10 +63,13 @@ void cn_json_dtcs(cn_engine *e, cn_jw *w)
         cn_jw_obj(w);
         cn_jw_kstr(w, "code", d->code);
         cn_jw_kstr(w, "kind", kinds[d->kind <= 3 ? d->kind : 0]);
-        if (d->ecu != 0xFF && e->profile && d->ecu < e->profile->necus)
+        if (d->ecu != 0xFF && e->profile && d->ecu < e->profile->necus) {
             cn_jw_kstr(w, "ecu", e->profile->ecus[d->ecu].id);
-        else
+            cn_jw_kstr(w, "module", e->profile->ecus[d->ecu].name);
+        } else {
             cn_jw_kint(w, "src", d->src);
+            cn_jw_kstr(w, "module", "Engine (OBD-II)");
+        }
         if (d->ftb) cn_jw_kint(w, "ftb", d->ftb);
         if (d->status) cn_jw_kint(w, "status", d->status);
         cn_jw_end_obj(w);
@@ -161,6 +167,7 @@ void cn_trip_begin(cn_engine *e)
             p->signals[i].sum = 0;
             p->signals[i].vmin = INFINITY;
             p->signals[i].vmax = -INFINITY;
+            p->signals[i].logged = false;
         }
     }
     const char *dir = data_dir(e);

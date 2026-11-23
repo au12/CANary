@@ -21,6 +21,7 @@ typedef struct {
     const char *vin;        /* default 3VV2B7AX5JM012345 */
     bool ext_ids;           /* answer on 29-bit identifiers instead (generic car) */
     bool no_uds;            /* behave like a car with standard OBD-II only */
+    double wear_per_day;    /* faults grow by this fraction per simulated day (0.03 = 3 % a day) */
 } simcar_cfg;
 
 typedef struct simcar simcar;
@@ -37,6 +38,8 @@ typedef struct {
 void simcar_script(simcar *c, const simcar_seg *segs, int n, bool loop);
 /* Built-in scripts */
 void simcar_script_commute(simcar *c, int minutes, bool loop);
+/* A looping 24-hour day with a morning and an evening drive. phase_s is the time of day at t = 0. */
+void simcar_script_daily(simcar *c, double phase_s);
 
 /* advance the model to absolute time t (seconds) */
 void simcar_advance(simcar *c, double t);

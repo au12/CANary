@@ -34,8 +34,8 @@ static const char *src_text(cn_engine *e, const cn_signal *s, char *buf, size_t 
     switch (src->kind) {
     case CN_SRC_OBD: snprintf(buf, n, "OBD-II PID %02X", src->code); break;
     case CN_SRC_UDS: snprintf(buf, n, "%s %04X", e->profile->ecus[src->ecu].name, src->code); break;
-    case CN_SRC_DEVICE: snprintf(buf, n, "CANary"); break;
-    default: snprintf(buf, n, "calculated");
+    case CN_SRC_DEVICE: snprintf(buf, n, "Measured by CANary"); break;
+    default: snprintf(buf, n, "Calculated");
     }
     return buf;
 }
@@ -70,7 +70,7 @@ static void api_status(cn_engine *e, cn_api_resp *r)
         if (p->requests[i].sup == CN_SUP_OK) supported++;
     int live = 0;
     for (int i = 0; i < p->nsignals; i++)
-        if (p->signals[i].active >= 0) live++;
+        if (cn_signal_available(e, i)) live++;
     cn_jw_key(&w, "vehicle");
     cn_jw_obj(&w);
     cn_jw_kstr(&w, "state", cn_vs_name(e->vs));
@@ -205,7 +205,7 @@ static void api_signals(cn_engine *e, const cn_api_req *req, cn_api_resp *r)
         cn_jw_kint(&w, "dec", s->dec);
         cn_jw_kstr(&w, "rate", cn_rate_name(s->rate));
         cn_jw_kstr(&w, "source", src_text(e, s, src, sizeof(src)));
-        cn_jw_kbool(&w, "available", s->active >= 0);
+        cn_jw_kbool(&w, "available", cn_signal_available(e, i));
         cn_jw_knum(&w, "v", fresh ? s->value : NAN, s->dec + 1);
         if (s->n) {
             cn_jw_knum(&w, "min", s->vmin, s->dec + 1);
@@ -271,6 +271,7 @@ static void api_findings(cn_engine *e, cn_api_resp *r)
         cn_jw_obj(&w);
         cn_jw_kstr(&w, "id", m->id);
         cn_jw_kstr(&w, "title", m->title);
+        cn_jw_kstr(&w, "headline", cn_monitor_headline(m));
         cn_jw_kstr(&w, "category", m->category);
         bool off = !m->enabled || (m->unavailable && m->status == CN_SEV_NODATA);
         cn_jw_kstr(&w, "status", off ? "unavailable" : cn_sev_name(m->status));
@@ -278,17 +279,21 @@ static void api_findings(cn_engine *e, cn_api_resp *r)
         cn_jw_kint(&w, "dec", m->dec);
         cn_jw_kstr(&w, "unit", m->unit);
         cn_jw_kstr(&w, "text", text);
+        if (cn_monitor_template(m)) cn_jw_kstr(&w, "tpl", cn_monitor_template(m));
         cn_jw_kstr(&w, "stat", cn_stat_name(m->stat));
         cn_jw_knum(&w, "seen_s", m->n * 0.5, 0);
         cn_jw_knum(&w, "need_s", m->min_time_s, 0);
-        if (m->detail) cn_jw_kstr(&w, "detail", m->detail);
+        if (cn_monitor_detail(m)) cn_jw_kstr(&w, "detail", cn_monitor_detail(m));
+        if (m->needs) cn_jw_kstr(&w, "needs", m->needs);
         if (!m->enabled)
             cn_jw_kstr(&w, "why", m->why_disabled);
         else if (m->unavailable)
             cn_jw_kstr(&w, "why", m->missing);
         cn_jw_key(&w, "causes");
         cn_jw_arr(&w);
-        for (int c = 0; c < m->ncauses; c++) cn_jw_str(&w, m->causes[c]);
+        char *const *causes;
+        int ncauses = cn_monitor_causes(m, &causes);
+        for (int c = 0; c < ncauses; c++) cn_jw_str(&w, causes[c]);
         cn_jw_end_arr(&w);
         cn_jw_key(&w, "levels");
         cn_jw_arr(&w);

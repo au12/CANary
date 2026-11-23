@@ -26,6 +26,7 @@ struct simcar {
     int nsegs;
     bool loop;
     double script_len;
+    double phase; /* script time at t = 0 */
     double t;
     uint32_t rng;
     /* state */
@@ -48,6 +49,9 @@ static double frand(simcar *c)
 }
 
 static double clampd(double v, double lo, double hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* Faults that get worse as the simulated days go by, so trends have something to show. */
+static double worn(simcar *c, double fault) { return fault * (1 + c->cfg.wear_per_day * c->t / 86400.0); }
 
 simcar *simcar_create(const simcar_cfg *cfg)
 {
@@ -88,10 +92,68 @@ void simcar_script(simcar *c, const simcar_seg *segs, int n, bool loop)
     for (int i = 0; i < n; i++) c->script_len += segs[i].seconds;
 }
 
+/* One drive, key-on to key-off. Returns the number of segments written. */
+static int drive_segments(simcar_seg *out, int minutes)
+{
+    double cruise = minutes * 60.0 - 430;
+    if (cruise < 60) cruise = 60;
+    const simcar_seg s[] = {
+        {4, 0, 0, true},               /* key on */
+        {35, 0, 0, false},             /* idle */
+        {45, 48, 0, false},            /* pull away */
+        {18, 0, 0, false},             /* lights */
+        {70, 62, 0, false},
+        {14, 0, 0, false},
+        {9, 120, 100, false},          /* on-ramp, full throttle */
+        {cruise * 0.45, 108, 0, false},
+        {16, 0, 0, false},             /* roadworks, stopped */
+        {26, 0, 0, false},
+        {9, 118, 90, false},
+        {7, 135, 100, false},          /* overtake */
+        {cruise * 0.55, 110, 0, false},
+        {9, 132, 78, false},           /* pass a truck */
+        {25, 100, 0, false},
+        {30, 55, 0, false},
+        {10, 95, 85, false},           /* brisk pull */
+        {60, 45, 0, false},
+        {50, 0, 0, false},             /* arrive, idle */
+    };
+    int n = (int)(sizeof(s) / sizeof(s[0]));
+    memcpy(out, s, sizeof(s));
+    return n;
+}
+
+static double segments_len(const simcar_seg *s, int n)
+{
+    double t = 0;
+    for (int i = 0; i < n; i++) t += s[i].seconds;
+    return t;
+}
+
+void simcar_script_daily(simcar *c, double phase_s)
+{
+    simcar_seg s[64];
+    int n = 0;
+    const double morning = 7 * 3600 + 38 * 60, evening = 17 * 3600 + 12 * 60;
+    s[n++] = (simcar_seg){morning, -1, 0, false};
+    int a = drive_segments(s + n, 12);
+    double used = morning + segments_len(s + n, a);
+    n += a;
+    s[n++] = (simcar_seg){evening - used, -1, 0, false};
+    int b = drive_segments(s + n, 15);
+    used = evening + segments_len(s + n, b);
+    n += b;
+    s[n++] = (simcar_seg){86400 - used, -1, 0, false};
+    simcar_script(c, s, n, true);
+    c->phase = fmod(phase_s, 86400);
+    if (c->phase < 0) c->phase += 86400;
+}
+
 void simcar_script_commute(simcar *c, int minutes, bool loop)
 {
     double cruise = minutes * 60.0 - 430;
     if (cruise < 60) cruise = 60;
+    c->phase = 0;
     simcar_seg s[] = {
         {15, -1, 0, false},            /* parked */
         {4, 0, 0, true},               /* key on */
@@ -122,6 +184,7 @@ static const simcar_seg *segment_at(simcar *c, double t)
 {
     static const simcar_seg off = {1e9, -1, 0, false};
     if (!c->nsegs) return &off;
+    t += c->phase;
     if (c->loop)
         t = fmod(t, c->script_len);
     else if (t >= c->script_len)
@@ -196,10 +259,10 @@ static void step(simcar *c)
     } else {
         target_abs = c->speed < 4 && c->pedal < 2 ? 34 : 36 + c->pedal * 1.7;
     }
-    double reach = target_abs <= BARO ? target_abs : BARO + (target_abs - BARO) * (1 - c->cfg.boost_leak);
+    double reach = target_abs <= BARO ? target_abs : BARO + (target_abs - BARO) * (1 - clampd(worn(c, c->cfg.boost_leak), 0, 0.6));
     c->boost_target = target_abs;
     c->boost_actual += (reach - c->boost_actual) * DT / 0.45;
-    c->wastegate = clampd(gauge / 136 * 82 + c->cfg.boost_leak * 140 * (gauge > 5), 0, 100);
+    c->wastegate = clampd(gauge / 136 * 82 + worn(c, c->cfg.boost_leak) * 140 * (gauge > 5), 0, 100);
     /* ignition */
     bool loaded = c->pedal > 45 && c->rpm > 1800;
     for (int i = 0; i < 4; i++) {
@@ -462,8 +525,8 @@ static int engine_did(simcar *c, uint16_t did, uint8_t *o)
     case 0x201D: return u16(o, c->cam_in_t * 10);
     case 0x201A: return u16(o, c->cam_ex_a * 10);
     case 0x2019: return u16(o, c->cam_ex_t * 10);
-    case 0x2021: return u16(o, -c->cfg.chain_stretch * 10);
-    case 0x2023: return u16(o, -c->cfg.chain_stretch * 0.6 * 10);
+    case 0x2021: return u16(o, -worn(c, c->cfg.chain_stretch) * 10);
+    case 0x2023: return u16(o, -worn(c, c->cfg.chain_stretch) * 0.6 * 10);
     case 0x2027: return u16(o, c->rail_actual / 10);
     case 0x116A: return u16(o, c->rail_target / 10);
     case 0x2025: return u16(o, c->lp_fuel * 10);

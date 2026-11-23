@@ -52,8 +52,9 @@ void web_stop(void);
 typedef struct {
     const char *path;
     const char *type;
-    const uint8_t *data; /* gzip */
+    const uint8_t *data;
     uint32_t len;
+    uint8_t gzip; /* 0 for files that are already compressed (fonts, PNG) */
 } web_asset;
 extern const web_asset g_web_assets[];
 extern const int g_web_asset_count;

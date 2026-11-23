@@ -14,7 +14,8 @@ void cn_monitors_reset(cn_profile *p)
     for (int i = 0; i < p->nmonitors; i++) {
         cn_monitor *m = &p->monitors[i];
         m->n = m->n_true = m->edges = m->gate_run = 0;
-        m->prev_true = m->reached = false;
+        m->prev_true = m->reached = m->skip = false;
+        m->side = 0;
         m->sum = m->first = m->last = 0;
         m->vmin = INFINITY;
         m->vmax = -INFINITY;
@@ -42,6 +43,12 @@ void cn_monitors_tick(cn_profile *p, const double *vars, double trip_time_s, dou
         if (++m->gate_run * TICK_S <= m->settle_s) continue; /* still settling */
         double v = cn_expr_eval(m->value, vars);
         if (isnan(v)) continue;
+        if (m->stat == CN_STAT_TIME_TO) {
+            /* "How long until X" has no answer when X already holds as the trip begins, such as a warm
+             * engine being restarted: the check then sits this trip out. */
+            if (!m->n && v != 0) m->skip = true;
+            if (m->skip) continue;
+        }
         if (!m->n) m->first = v;
         m->last = v;
         m->n++;
@@ -137,11 +144,41 @@ void cn_monitors_evaluate(cn_profile *p, double trip_time_s)
             m->status = CN_SEV_NODATA;
             continue;
         }
-        uint8_t sev = CN_SEV_OK;
+        uint8_t sev = CN_SEV_OK, side = 0;
         for (int l = 0; l < m->nlevels; l++)
-            if (level_hit(&m->levels[l], v) && m->levels[l].sev > sev) sev = m->levels[l].sev;
+            if (level_hit(&m->levels[l], v) && m->levels[l].sev > sev) {
+                sev = m->levels[l].sev;
+                side = m->two_sided && m->levels[l].op >= CN_OP_LT;
+            }
         m->status = sev;
+        m->side = side;
     }
+}
+
+static const cn_mon_text *says(const cn_monitor *m) { return &m->says[m->status != CN_SEV_NODATA && m->status > CN_SEV_OK ? m->side : 0]; }
+
+const char *cn_monitor_headline(const cn_monitor *m)
+{
+    if (m->status == CN_SEV_NODATA || m->status == CN_SEV_OK) return m->title;
+    const char *a = says(m)->alert ? says(m)->alert : m->says[0].alert;
+    return a ? a : m->title;
+}
+
+const char *cn_monitor_template(const cn_monitor *m)
+{
+    if (m->status == CN_SEV_NODATA) return NULL;
+    const char *sum = says(m)->summary ? says(m)->summary : m->says[0].summary;
+    if (m->status > CN_SEV_OK) return sum ? sum : "Outside the expected range ({value}).";
+    return m->ok_text ? m->ok_text : "Within the expected range ({value}).";
+}
+
+const char *cn_monitor_detail(const cn_monitor *m) { return says(m)->detail ? says(m)->detail : m->says[0].detail; }
+
+int cn_monitor_causes(const cn_monitor *m, char *const **list)
+{
+    const cn_mon_text *t = says(m)->ncauses ? says(m) : &m->says[0];
+    *list = t->causes;
+    return t->ncauses;
 }
 
 void cn_monitor_text(const cn_monitor *m, char *out, size_t n)
@@ -154,10 +191,13 @@ void cn_monitor_text(const cn_monitor *m, char *out, size_t n)
             cn_strlcpy(out, m->enabled ? "Not enough data yet." : "Not available on this vehicle.", n);
         return;
     }
-    tpl = m->status > CN_SEV_OK ? m->summary : (m->ok_text ? m->ok_text : m->summary);
-    if (!tpl) tpl = m->status > CN_SEV_OK ? "Outside the expected range ({value})." : "Within the expected range.";
-    char num[32];
-    snprintf(num, sizeof(num), "%.*f", m->dec, m->result);
+    tpl = cn_monitor_template(m);
+    /* "{value}" carries its unit: "25.0 kPa", "4.6°", "18%". Web UI and Glovebox re-render it in the user's units. */
+    char num[48];
+    const char *unit = m->unit;
+    if (!strncmp(unit, "\xCE\x94", 2)) unit += 2; /* Δ marks a difference; it is not shown */
+    bool tight = !unit[0] || !strcmp(unit, "%") || !strcmp(unit, "\xC2\xB0");
+    snprintf(num, sizeof(num), "%.*f%s%s", m->dec, m->result, tight ? "" : " ", unit);
     size_t o = 0;
     for (const char *s = tpl; *s && o + 1 < n;) {
         if (!strncmp(s, "{value}", 7)) {

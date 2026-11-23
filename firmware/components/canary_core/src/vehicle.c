@@ -163,6 +163,12 @@ static bool signal_dead(cn_engine *e, int idx, int depth)
     return true;
 }
 
+bool cn_signal_available(cn_engine *e, int idx)
+{
+    if (idx < 0 || idx >= e->profile->nsignals) return false;
+    return e->profile->signals[idx].active >= 0 && !signal_dead(e, idx, 0);
+}
+
 static void recompute_needed(cn_engine *e)
 {
     cn_profile *p = e->profile;
@@ -437,13 +443,19 @@ void cn_signal_update(cn_engine *e, int idx, double value, int64_t now)
         if (value < s->vmin) s->vmin = value;
         if (value > s->vmax) s->vmax = value;
     }
-    if (now - s->hist_t >= CN_HIST_STEP_MS || !s->hist_n) {
-        s->hist_t = now;
-        s->hist[s->hist_head] = (float)value;
-        s->hist_head = (uint8_t)((s->hist_head + 1) % CN_HIST);
-        if (s->hist_n < CN_HIST) s->hist_n++;
+    if (s->log) {
+        /* A reading that has not changed is written again only often enough to show it is still alive:
+         * whoever reads the log holds each value until it goes stale (cn_rate_stale_ms). This roughly
+         * halves the size of a recording without losing anything. */
+        int stale = cn_rate_stale_ms[s->rate];
+        int repeat = stale ? stale * 2 / 5 : 60000;
+        if (!s->logged || value != s->log_value || now - s->log_t >= repeat) {
+            cn_trip_sample(e, idx, value, now);
+            s->logged = true;
+            s->log_value = value;
+            s->log_t = now;
+        }
     }
-    if (s->log) cn_trip_sample(e, idx, value, now);
     if (idx == e->odo_sig && value > 0) {
         e->last_odo_km = value;
         e->last_odo_wall = e->pf.wall_s(e->pf.ctx);
@@ -996,6 +1008,22 @@ static void periodic(cn_engine *e, int64_t now)
         }
         update_derived(e, now);
         if (e->mil_sig >= 0 && p->signals[e->mil_sig].valid) e->mil = p->signals[e->mil_sig].value > 0;
+        /* Recent history for the live view: every signal on the same clock, so all the small charts
+         * cover the same few minutes whatever their polling rate. A signal that goes quiet starts over. */
+        if (now - e->last_hist_ms >= CN_HIST_STEP_MS) {
+            e->last_hist_ms = now;
+            for (int i = 0; i < p->nsignals; i++) {
+                cn_signal *s = &p->signals[i];
+                int stale = cn_rate_stale_ms[s->rate];
+                if (!s->valid || (stale && now - s->t_ms > stale)) {
+                    s->hist_n = 0;
+                    continue;
+                }
+                s->hist[s->hist_head] = (float)s->value;
+                s->hist_head = (uint8_t)((s->hist_head + 1) % CN_HIST);
+                if (s->hist_n < CN_HIST) s->hist_n++;
+            }
+        }
         unlock(e);
     }
     /* trip tick: 2 Hz */

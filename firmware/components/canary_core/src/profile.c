@@ -431,15 +431,24 @@ static bool build(cn_profile *p, const cJSON *doc, char *err, size_t err_len)
         m->dec = (uint8_t)jnum(it, "dec", 1);
         m->min_time_s = (float)jnum(it, "min_time_s", 10);
         m->settle_s = (float)jnum(it, "settle_s", 0);
-        m->summary = dupstr(jstr(it, "summary"));
         m->ok_text = dupstr(jstr(it, "ok"));
-        m->detail = dupstr(jstr(it, "detail"));
+        m->needs = dupstr(jstr(it, "needs"));
         m->rng = cn_fnv1a(id, strlen(id), 0) | 1u;
-        const cJSON *c;
-        cJSON_ArrayForEach(c, cJSON_GetObjectItemCaseSensitive(it, "causes"))
-        {
-            if (m->ncauses < CN_MAX_CAUSES && cJSON_IsString(c)) m->causes[m->ncauses++] = strdup(c->valuestring);
+        const cJSON *low = cJSON_GetObjectItemCaseSensitive(it, "low");
+        m->two_sided = cJSON_IsObject(low);
+        for (int side = 0; side < (m->two_sided ? 2 : 1); side++) {
+            const cJSON *from = side ? low : it;
+            cn_mon_text *t = &m->says[side];
+            t->alert = dupstr(jstr(from, "alert"));
+            t->summary = dupstr(jstr(from, "summary"));
+            t->detail = dupstr(jstr(from, "detail"));
+            const cJSON *cause;
+            cJSON_ArrayForEach(cause, cJSON_GetObjectItemCaseSensitive(from, "causes"))
+            {
+                if (t->ncauses < CN_MAX_CAUSES && cJSON_IsString(cause)) t->causes[t->ncauses++] = strdup(cause->valuestring);
+            }
         }
+        const cJSON *c;
         cJSON_ArrayForEach(c, cJSON_GetObjectItemCaseSensitive(it, "levels"))
         {
             if (m->nlevels >= CN_MAX_LEVELS) break;
@@ -526,10 +535,15 @@ void cn_profile_free(cn_profile *p)
         cn_monitor *m = &p->monitors[i];
         cn_expr_free(m->when);
         cn_expr_free(m->value);
-        free(m->summary);
         free(m->ok_text);
-        free(m->detail);
-        for (int c = 0; c < m->ncauses; c++) free(m->causes[c]);
+        free(m->needs);
+        for (int side = 0; side < 2; side++) {
+            cn_mon_text *t = &m->says[side];
+            free(t->alert);
+            free(t->summary);
+            free(t->detail);
+            for (int c = 0; c < t->ncauses; c++) free(t->causes[c]);
+        }
     }
     free(p->signals);
     free(p->requests);

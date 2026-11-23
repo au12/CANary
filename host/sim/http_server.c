@@ -28,6 +28,7 @@ static const char *mime(const char *path)
     if (!strcmp(ext, ".svg")) return "image/svg+xml";
     if (!strcmp(ext, ".png")) return "image/png";
     if (!strcmp(ext, ".ico")) return "image/x-icon";
+    if (!strcmp(ext, ".woff2")) return "font/woff2";
     return "text/plain; charset=utf-8";
 }
 
@@ -115,6 +116,19 @@ static void *serve(void *arg)
                                "{\"ssid\":\"Garage\",\"rssi\":-71,\"secure\":true},{\"ssid\":\"xfinitywifi\",\"rssi\":-83,\"secure\":false}]}";
             send_head(c->fd, 200, "application/json", (long)strlen(nets), NULL);
             send_all(c->fd, nets, strlen(nets));
+        } else if (!strcmp(target, "/api/system")) {
+            char sys[512];
+            snprintf(sys, sizeof(sys),
+                     "{\"fw\":\"%s\",\"build\":\"simulator\",\"idf\":\"host\",\"board\":\"%s\",\"device\":\"%s\",\"recovery\":false,"
+                     "\"reset_reason\":\"power on\",\"partition\":\"ota_0\",\"heap_free\":182344,\"heap_min\":141200,\"psram_free\":7912448,"
+                     "\"obd_chip\":\"MIC3624 v2.3.19\",\"sd_card\":\"SD32G 29.7 GB\",\"sd_mounted\":true,\"uptime_s\":%lld}",
+                     CN_FW_VERSION, c->e->board, c->e->device_id, (long long)((c->e->pf.mono_ms(c->e->pf.ctx) - c->e->boot_mono) / 1000));
+            send_head(c->fd, 200, "application/json", (long)strlen(sys), NULL);
+            send_all(c->fd, sys, strlen(sys));
+        } else if (!strcmp(target, "/api/ap") && !strcmp(method, "POST")) {
+            const char *msg = "{\"ok\":true}";
+            send_head(c->fd, 200, "application/json", (long)strlen(msg), NULL);
+            send_all(c->fd, msg, strlen(msg));
         } else {
             const char *msg = "{\"ok\":false,\"error\":\"not available in the simulator\"}";
             send_head(c->fd, 404, "application/json", (long)strlen(msg), NULL);

@@ -204,7 +204,7 @@ void cn_expr_vars(const cn_expr *e, void (*fn)(void *ctx, int var), void *ctx);
 #define CN_MAX_SIGNALS 160
 #define CN_MAX_REQUESTS 200
 #define CN_MAX_MONITORS 64
-#define CN_MAX_LEVELS 4
+#define CN_MAX_LEVELS 6
 #define CN_MAX_CAUSES 6
 #define CN_HIST 90
 #define CN_HIST_STEP_MS 2000
@@ -269,7 +269,9 @@ typedef struct {
     double sum, vmin, vmax;
     float hist[CN_HIST];
     uint8_t hist_n, hist_head;
-    int64_t hist_t;
+    bool logged;      /* written to the current trip's log at least once */
+    double log_value; /* the value last written, and when */
+    int64_t log_t;
 } cn_signal;
 
 typedef struct {
@@ -288,20 +290,30 @@ typedef struct {
     double thr;
 } cn_level;
 
+/* What a check says when it trips. A check that can fail in two directions (too lean or too rich)
+ * carries one set for each direction. */
+typedef struct {
+    char *alert;   /* headline while failing; NULL = the check's title */
+    char *summary; /* "{value}" is replaced with the result */
+    char *detail;
+    char *causes[CN_MAX_CAUSES];
+    uint8_t ncauses;
+} cn_mon_text;
+
 typedef struct {
     char id[CN_ID_LEN];
-    char title[64];
+    char title[64]; /* names the check, not the fault: "Fuel mixture at idle" */
     char category[16];
     char unit[12];
-    uint8_t stat, dec, nlevels, ncauses;
+    uint8_t stat, dec, nlevels;
     float min_time_s;
     float settle_s; /* the gate must have held this long before samples count (skips turbo spool-up and the like) */
     cn_level levels[CN_MAX_LEVELS];
     cn_expr *when, *value;
-    char *summary; /* "{value}" is replaced with the result */
+    cn_mon_text says[2]; /* [0] the default and the "too high" side; [1] the "too low" side of a two-sided check */
+    bool two_sided;      /* the profile gave a "low" set */
     char *ok_text;
-    char *detail;
-    char *causes[CN_MAX_CAUSES];
+    char *needs; /* the driving this check waits for, completing "needs N of ..." */
     bool enabled;
     char why_disabled[48];
     bool unavailable;        /* a signal it needs is not reported by this car */
@@ -309,12 +321,14 @@ typedef struct {
     /* accumulators (reset per trip) */
     uint32_t n, n_true, edges, gate_run;
     bool prev_true, reached;
+    bool skip; /* does not apply to this trip (a "time to" that was already true as the trip began) */
     double sum, vmin, vmax, first, last;
     float time_to_s;
     float res[CN_RESERVOIR];
     uint32_t res_seen, rng;
     /* result */
     uint8_t status;
+    uint8_t side; /* which of says[] applies to the current result */
     bool has_result;
     double result;
 } cn_monitor;
@@ -523,7 +537,7 @@ typedef struct cn_engine {
     uint32_t pick_count, boot_count;
     bool has_vbat, wake_request, support_dirty, heartbeat_logged;
     int mil_sig, detect_fails;
-    int64_t last_derived_ms, last_eval_ms, last_retention_ms, last_state_save_ms, last_can_open_ms;
+    int64_t last_derived_ms, last_eval_ms, last_retention_ms, last_state_save_ms, last_can_open_ms, last_hist_ms;
     char state_profile[40]; /* profile used last time, so the right one loads before the VIN is read */
     uint32_t cfg_gen;       /* bumped when settings change; the platform re-reads Wi-Fi settings */
     bool profile_change_pending;
@@ -554,11 +568,18 @@ bool cn_power_should_wake(const cn_config *cfg, float vbat, float vbat_min_aslee
 
 /* signals / monitors */
 void cn_signal_update(cn_engine *e, int idx, double value, int64_t now_ms);
+/* False when this car can never supply the signal: no source answered, or a calculation lacks an input. */
+bool cn_signal_available(cn_engine *e, int idx);
 void cn_monitors_reset(cn_profile *p);
 void cn_monitors_tick(cn_profile *p, const double *vars, double trip_time_s, double dt_s);
 void cn_monitors_evaluate(cn_profile *p, double trip_time_s);
 double cn_monitor_stat(const cn_monitor *m, double trip_time_s, bool *ok);
 void cn_monitor_text(const cn_monitor *m, char *out, size_t n);
+/* Texts for the current result. A missing "low" text falls back to the default one. */
+const char *cn_monitor_headline(const cn_monitor *m); /* the alert while failing, otherwise the title */
+const char *cn_monitor_template(const cn_monitor *m); /* sentence with "{value}", or NULL without a result */
+const char *cn_monitor_detail(const cn_monitor *m);
+int cn_monitor_causes(const cn_monitor *m, char *const **list);
 int cn_worst_severity(const cn_engine *e, int *count_above_ok);
 
 /* trips */

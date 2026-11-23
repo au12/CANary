@@ -280,7 +280,7 @@ static esp_err_t handler(httpd_req_t *req)
     for (int i = 0; i < g_web_asset_count; i++) {
         if (strcmp(g_web_assets[i].path, want) != 0) continue;
         httpd_resp_set_type(req, g_web_assets[i].type);
-        httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+        if (g_web_assets[i].gzip) httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
         httpd_resp_set_hdr(req, "Cache-Control", !strcmp(want, "/index.html") ? "no-cache" : "max-age=86400");
         return httpd_resp_send(req, (const char *)g_web_assets[i].data, (ssize_t)g_web_assets[i].len);
     }

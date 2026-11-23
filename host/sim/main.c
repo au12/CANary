@@ -3,6 +3,11 @@
  *   canary-sim [--port 8088] [--speed 1] [--scenario healthy|worn|generic]
  *              [--state DIR] [--profiles DIR] [--web DIR] [--minutes 12]
  *              [--wifi home|always|never] [--fast-forward SECONDS]
+ *              [--days N] [--tz MINUTES] [--wear PERCENT_PER_DAY]
+ *
+ * --fast-forward runs that much history flat out before serving, ending at the present moment.
+ * --days N does the same for N days of a morning and an evening drive (a commuter's fortnight in
+ * a few seconds), with the car's faults growing by --wear percent a day.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "host_platform.h"
@@ -10,6 +15,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 int http_serve(cn_engine *e, const char *web_dir, int port);
@@ -59,8 +65,8 @@ static void *sync_thread(void *arg)
 int main(int argc, char **argv)
 {
     const char *state = "/tmp/canary-sim", *profiles = "profiles", *web = "firmware/web", *scenario = "worn";
-    int port = 8088, minutes = 12;
-    double speed = 1, ff = 0;
+    int port = 8088, minutes = 12, tz_min = 0;
+    double speed = 1, ff = 0, days = 0, wear = 0;
     for (int i = 1; i + 1 < argc; i += 2) {
         const char *k = argv[i], *v = argv[i + 1];
         if (!strcmp(k, "--port")) port = atoi(v);
@@ -72,7 +78,11 @@ int main(int argc, char **argv)
         else if (!strcmp(k, "--minutes")) minutes = atoi(v);
         else if (!strcmp(k, "--wifi")) g_wifi = v;
         else if (!strcmp(k, "--fast-forward")) ff = atof(v);
+        else if (!strcmp(k, "--days")) days = atof(v);
+        else if (!strcmp(k, "--tz")) tz_min = atoi(v);
+        else if (!strcmp(k, "--wear")) wear = atof(v);
     }
+    if (days > 0) ff = days * 86400;
     simcar_cfg cfg;
     memset(&cfg, 0, sizeof(cfg));
     if (!strcmp(scenario, "worn")) {
@@ -87,12 +97,19 @@ int main(int argc, char **argv)
         cfg.no_uds = true;
         cfg.vin = "1HGCM82633A004352";
     }
+    cfg.wear_per_day = wear / 100.0;
     cn_mkdirs(state);
     simcar *car = simcar_create(&cfg);
-    simcar_script_commute(car, minutes, true);
+    int64_t start_wall = (int64_t)time(NULL) - (int64_t)ff;
+    if (days > 0)
+        simcar_script_daily(car, (double)((start_wall + tz_min * 60) % 86400));
+    else
+        simcar_script_commute(car, minutes, true);
     g_h = host_platform_create(car, state, ff > 0);
+    if (ff > 0) g_h->wall_base = start_wall; /* history ends now */
     g_e = cn_engine_create(&g_h->pf, host_profile_loader, (void *)profiles, "canary-51m0a7", "simulator");
     if (!g_e) return 1;
+    if (tz_min) g_e->cfg.tz_offset_min = tz_min;
     if (ff > 0) {
         /* run a stretch of virtual time flat out (to pre-fill trips), then carry on in real time */
         int64_t last = -1000;

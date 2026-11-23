@@ -1,0 +1,5 @@
+The Barlow typeface files in this folder (barlow-*.woff2) are
+Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
+and licensed under the SIL Open Font License 1.1: see docs/licenses/OFL-Barlow.txt.
+
+Everything else here is part of CANary and licensed under GPL-3.0-or-later.

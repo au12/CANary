@@ -252,7 +252,7 @@ static void test_monitor_math(void)
         cn_monitor *m = &p->monitors[i];
         if (!strcmp(m->id, "boost_under_target")) under = m;
         if (!strcmp(m->id, "warmup_slow")) warm = m;
-        if (!strcmp(m->id, "fuel_trim_idle_lean")) lean = m;
+        if (!strcmp(m->id, "fuel_trim_idle")) lean = m;
         if (!strcmp(m->id, "charging_low")) chg = m;
     }
     CHECK(under && warm && lean && chg);
@@ -261,7 +261,7 @@ static void test_monitor_math(void)
     CHECK(under->status == CN_SEV_WARNING);
     char text[200];
     cn_monitor_text(under, text, sizeof(text));
-    CHECK(strstr(text, "25.0 kPa") != NULL);
+    CHECK(strstr(text, "25.0 kPa short") != NULL);
     /* time_to: reached at t=30 s, but not enough gated time for a verdict yet */
     CHECK(warm->reached && fabs(warm->time_to_s - 30) < 0.01 && warm->status == CN_SEV_NODATA);
     /* signals never seen: no verdict, not a false alarm */
@@ -276,6 +276,36 @@ static void test_monitor_math(void)
     for (int i = 0; i < 300; i++) cn_monitors_tick(p, v, i * 0.5, 0.5);
     cn_monitors_evaluate(p, 150);
     CHECK(chg->status == CN_SEV_WARNING);
+    CHECK(!strcmp(cn_monitor_headline(chg), "Charging voltage low") && !strcmp(chg->title, "Charging voltage"));
+
+    /* a two-sided check: one definition, a different story for each direction */
+    cn_monitors_reset(p);
+    SET("rpm", 800);
+    SET("speed", 0);
+    SET("coolant_temp", 90);
+    SET("fuel_trim_b1", 12);
+    for (int i = 0; i < 120; i++) cn_monitors_tick(p, v, i * 0.5, 0.5);
+    cn_monitors_evaluate(p, 60);
+    char *const *causes;
+    CHECK(lean->two_sided && lean->status == CN_SEV_ADVISORY && lean->side == 0);
+    CHECK(!strcmp(cn_monitor_headline(lean), "Running lean at idle"));
+    CHECK(cn_monitor_causes(lean, &causes) == 4 && strstr(causes[0], "Vacuum") != NULL);
+    cn_monitors_reset(p);
+    SET("fuel_trim_b1", -17);
+    for (int i = 0; i < 120; i++) cn_monitors_tick(p, v, i * 0.5, 0.5);
+    cn_monitors_evaluate(p, 60);
+    CHECK(lean->status == CN_SEV_WARNING && lean->side == 1);
+    CHECK(!strcmp(cn_monitor_headline(lean), "Running rich at idle"));
+    cn_monitor_text(lean, text, sizeof(text));
+    CHECK(strstr(text, "-17.0%") != NULL && strstr(text, "taking fuel out") != NULL);
+    CHECK(cn_monitor_causes(lean, &causes) == 4 && strstr(causes[0], "injector") != NULL);
+    cn_monitors_reset(p);
+    SET("fuel_trim_b1", 2);
+    for (int i = 0; i < 120; i++) cn_monitors_tick(p, v, i * 0.5, 0.5);
+    cn_monitors_evaluate(p, 60);
+    CHECK(lean->status == CN_SEV_OK && !strcmp(cn_monitor_headline(lean), "Fuel mixture at idle"));
+    /* an engine that is already warm when the trip begins says nothing about warm-up time */
+    CHECK(warm->skip && warm->n == 0 && warm->status == CN_SEV_NODATA);
 #undef SET
     free(v);
     cn_profile_free(p);
@@ -585,8 +615,9 @@ static void test_faulty_drive(void)
     m = mon(r.e, "chain_stretch_intake");
     CHECK(m->status == CN_SEV_WARNING);
     CHECK_NEAR(m->result, 4.6, 0.05);
-    m = mon(r.e, "fuel_trim_idle_lean");
+    m = mon(r.e, "fuel_trim_idle");
     CHECK(m->status >= CN_SEV_ADVISORY && m->result > 9);
+    CHECK(!strcmp(cn_monitor_headline(m), "Running lean at idle"));
     m = mon(r.e, "knock_one_cylinder");
     CHECK(m->status >= CN_SEV_ADVISORY);
     m = mon(r.e, "knock_retard");
