@@ -146,7 +146,7 @@ static void api_status(cn_engine *e, cn_api_resp *r)
     static const char *const modes[] = {"none", "lubelogger", "canary"};
     cn_jw_key(&w, "sync");
     cn_jw_obj(&w);
-    cn_jw_kbool(&w, "configured", e->cfg.gb_url[0] && e->cfg.gb_api_key[0] && e->cfg.gb_vehicle_id > 0);
+    cn_jw_kbool(&w, "configured", e->cfg.gb_url[0] && e->cfg.gb_vehicle_id > 0);
     cn_jw_kstr(&w, "mode", modes[e->sync.mode]);
     cn_jw_kbool(&w, "busy", e->sync.busy);
     cn_jw_kint(&w, "last_ok", e->sync.last_ok_wall);
@@ -760,6 +760,11 @@ bool cn_api_handle(cn_engine *e, const cn_api_req *req, cn_api_resp *r)
         api_config_get(e, r);
     } else if (post && !strcmp(p, "config")) {
         api_config_post(e, req, r);
+    } else if (get && !strcmp(p, "profile")) {
+        /* the vehicle profile in use, with inheritance resolved: what Glovebox receives, and a help when writing one */
+        lock(e);
+        cn_buf_puts(&r->body, e->profile->resolved_json ? e->profile->resolved_json : "{}");
+        unlock(e);
     } else if (get && !strcmp(p, "events")) {
         api_events(e, r);
     } else if (get && !strcmp(p, "support")) {

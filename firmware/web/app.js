@@ -989,7 +989,7 @@ const Device = {
       : `${lamp('nodata')}<div><b>Not connected to Wi-Fi</b><span>${n.ap_active ? `You are reaching CANary through its own network, ${esc(n.ap_ssid)}.` : 'Looking for a known network.'}</span></div>`);
     const sy = st.sync;
     let syncHead, syncText, syncLamp = 'ok';
-    if (!sy.configured) { syncLamp = 'nodata'; syncHead = 'Not connected'; syncText = 'Fill in the three fields below.'; }
+    if (!sy.configured) { syncLamp = 'nodata'; syncHead = 'Not connected'; syncText = 'Enter the address and vehicle number below.'; }
     else if (sy.busy) { syncLamp = 'nodata'; syncHead = sy.up_total > 0 ? `Uploading a drive, ${Math.round(100 * sy.up_done / sy.up_total)}%` : 'Syncing now'; syncText = `${sy.pending_trips} ${plural(sy.pending_trips, 'drive')} waiting.`; }
     else if (sy.last_error) { syncLamp = 'warning'; syncHead = 'The last sync failed'; syncText = sy.last_error; }
     else if (known(sy.last_ok)) {
@@ -1046,14 +1046,14 @@ const Device = {
       <p style="margin-top:14px">Every time CANary joins Wi-Fi it sends the odometer reading to Glovebox and uploads the drives recorded since last time. Glovebox turns them into the weekly report.</p>
       <form class="form" data-form="glovebox">
         <label>Glovebox address<input class="field" name="url" type="url" inputmode="url" placeholder="http://192.168.1.10:8080" value="${esc(g.url)}" autocapitalize="none" spellcheck="false"></label>
-        <label>API key<input class="field" name="api_key" type="password" autocomplete="off" placeholder="${g.api_key_set ? 'Saved. Type to replace it' : 'Paste the key'}"><small>Create one in Glovebox under Settings, API keys.</small></label>
+        <label>API key<input class="field" name="api_key" type="password" autocomplete="off" placeholder="${g.api_key_set ? 'Saved. Type to replace it' : 'Paste the key'}"><small>Glovebox creates one for you on the vehicle’s CANary page. Leave empty if your Glovebox has no login.</small></label>
         <div class="row">
-          <label>Vehicle number<input class="field" name="vehicle_id" type="number" min="1" inputmode="numeric" value="${g.vehicle_id || ''}"><small>Shown on the vehicle’s CANary tab in Glovebox.</small></label>
+          <label>Vehicle number<input class="field" name="vehicle_id" type="number" min="1" inputmode="numeric" value="${g.vehicle_id || ''}"><small>Shown on the same page in Glovebox.</small></label>
           <label>Odometer in Glovebox<select class="field" name="odometer_unit"><option value="mi"${g.odometer_unit === 'km' ? '' : ' selected'}>Miles</option><option value="km"${g.odometer_unit === 'km' ? ' selected' : ''}>Kilometres</option></select><small>Used only with plain LubeLogger.</small></label>
         </div>
         <label>Odometer correction<input class="field" name="odometer_offset" type="number" step="0.1" value="${g.odometer_offset || 0}"><small>Added to every reading, in the unit above. Use it if the instrument cluster was replaced.</small></label>
         <label class="check"><input type="checkbox" name="upload_logs"${g.upload_logs ? ' checked' : ''}>Upload recorded drives for the weekly report</label>
-        <div class="actions"><button class="btn primary">Save</button><button class="btn" type="button" data-act="sync">Sync now</button></div>
+        <div class="actions"><button class="btn primary">Save</button><button class="btn" type="button" data-act="sync">Sync now</button>${g.api_key_set ? '<button class="btn" type="button" data-act="key-clear">Forget the API key</button>' : ''}</div>
       </form></div>`;
   },
 
@@ -1273,6 +1273,8 @@ view.addEventListener('click', async e => {
     } else if (act === 'reboot') {
       await api('/api/reboot', { method: 'POST' });
       waitForRestart('CANary is restarting. This page reloads by itself.');
+    } else if (act === 'key-clear') {
+      if (await saveConfig({ glovebox: { api_key: '' } }, 'API key removed')) Device.draw('glovebox');
     } else if (act === 'password-clear') {
       if (await saveConfig({ ui_password: '' }, 'Password removed')) Device.draw('system');
     } else if (act === 'format') {

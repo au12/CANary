@@ -337,7 +337,7 @@ void cn_sync_step(cn_engine *e)
 {
     int64_t now = now_ms(e);
     lock(e);
-    bool configured = e->cfg.gb_url[0] && e->cfg.gb_api_key[0] && e->cfg.gb_vehicle_id > 0;
+    bool configured = e->cfg.gb_url[0] && e->cfg.gb_vehicle_id > 0; /* the key is optional: a server without login needs none */
     e->sync.pending_trips = e->cfg.gb_upload_logs && configured ? count_pending(e) : 0;
     bool connected = e->net.connected;
     bool settled = now - e->sync.connected_since_ms > 3000;
