@@ -200,7 +200,7 @@ void cn_expr_vars(const cn_expr *e, void (*fn)(void *ctx, int var), void *ctx);
 
 #define CN_ID_LEN 28
 #define CN_MAX_ECUS 16
-#define CN_MAX_SRC 4
+#define CN_MAX_SRC 6
 #define CN_MAX_SIGNALS 160
 #define CN_MAX_REQUESTS 200
 #define CN_MAX_MONITORS 64

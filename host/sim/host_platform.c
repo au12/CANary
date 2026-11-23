@@ -36,6 +36,7 @@ static int64_t p_wall(void *ctx)
 static void p_set_wall(void *ctx, int64_t unix_s)
 {
     host_platform *h = ctx;
+    if (h->hold_clock) return;
     h->wall_base = unix_s - p_mono(h) / 1000;
 }
 

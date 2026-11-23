@@ -193,7 +193,7 @@ static void test_profiles(void)
     CHECK(odo >= 0);
     cn_signal *s = &t->signals[odo];
     /* cluster first, engine fallbacks, then the generic PID */
-    CHECK(s->nsrc == 4 && s->src[0].kind == CN_SRC_UDS && s->src[0].code == 0x2203 && s->src[3].kind == CN_SRC_OBD && s->src[3].code == 0xA6);
+    CHECK(s->nsrc == 5 && s->src[0].kind == CN_SRC_UDS && s->src[0].code == 0x22B8 && s->src[1].code == 0x2203 && s->src[4].kind == CN_SRC_OBD && s->src[4].code == 0xA6);
     CHECK(!strcmp(t->ecus[s->src[0].ecu].id, "cluster") && t->ecus[s->src[0].ecu].tx == 0x714 && t->ecus[s->src[0].ecu].rx == 0x77E);
     int ba = cn_profile_signal_index(t, "boost_actual");
     CHECK(ba >= 0 && t->signals[ba].src[0].code == 0x202A && !strcmp(t->signals[ba].name, "Boost pressure (actual, absolute)"));
@@ -648,6 +648,8 @@ static void test_faulty_drive(void)
     CHECK(r.gb.trip_data.len == len && log && !memcmp(r.gb.trip_data.p, log, len));
     CHECK(r.e->trips[0].uploaded_at > 0 && r.gb.crc_ok);
     CHECK(log && strstr(log, " dtc {\"codes\":[{\"code\":\"P0299\""));
+    /* the log names the kind and the control unit in words, exactly as the API does */
+    CHECK(log && strstr(log, "\"kind\":\"stored\"") && strstr(log, "\"ecu\":\"abs\",\"module\":\"Brakes / ABS\""));
     free(log);
     free(path);
 

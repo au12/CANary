@@ -4,6 +4,7 @@
  *              [--state DIR] [--profiles DIR] [--web DIR] [--minutes 12]
  *              [--wifi home|always|never] [--fast-forward SECONDS]
  *              [--days N] [--tz MINUTES] [--wear PERCENT_PER_DAY]
+ *              [--glovebox URL --vehicle N [--key KEY]]
  *
  * --fast-forward runs that much history flat out before serving, ending at the present moment.
  * --days N does the same for N days of a morning and an evening drive (a commuter's fortnight in
@@ -65,7 +66,8 @@ static void *sync_thread(void *arg)
 int main(int argc, char **argv)
 {
     const char *state = "/tmp/canary-sim", *profiles = "profiles", *web = "firmware/web", *scenario = "worn";
-    int port = 8088, minutes = 12, tz_min = 0;
+    int port = 8088, minutes = 12, tz_min = 0, vehicle = 0;
+    const char *glovebox = NULL, *key = NULL;
     double speed = 1, ff = 0, days = 0, wear = 0;
     for (int i = 1; i + 1 < argc; i += 2) {
         const char *k = argv[i], *v = argv[i + 1];
@@ -81,6 +83,9 @@ int main(int argc, char **argv)
         else if (!strcmp(k, "--days")) days = atof(v);
         else if (!strcmp(k, "--tz")) tz_min = atoi(v);
         else if (!strcmp(k, "--wear")) wear = atof(v);
+        else if (!strcmp(k, "--glovebox")) glovebox = v;
+        else if (!strcmp(k, "--vehicle")) vehicle = atoi(v);
+        else if (!strcmp(k, "--key")) key = v;
     }
     if (days > 0) ff = days * 86400;
     simcar_cfg cfg;
@@ -106,10 +111,18 @@ int main(int argc, char **argv)
     else
         simcar_script_commute(car, minutes, true);
     g_h = host_platform_create(car, state, ff > 0);
-    if (ff > 0) g_h->wall_base = start_wall; /* history ends now */
+    if (ff > 0) {
+        g_h->wall_base = start_wall; /* history ends now */
+        g_h->hold_clock = true;      /* a real server would otherwise pull the replayed past into the present */
+    }
     g_e = cn_engine_create(&g_h->pf, host_profile_loader, (void *)profiles, "canary-51m0a7", "simulator");
     if (!g_e) return 1;
     if (tz_min) g_e->cfg.tz_offset_min = tz_min;
+    if (glovebox) {
+        cn_strlcpy(g_e->cfg.gb_url, glovebox, sizeof(g_e->cfg.gb_url));
+        cn_strlcpy(g_e->cfg.gb_api_key, key ? key : "", sizeof(g_e->cfg.gb_api_key));
+        g_e->cfg.gb_vehicle_id = vehicle;
+    }
     if (ff > 0) {
         /* run a stretch of virtual time flat out (to pre-fill trips), then carry on in real time */
         int64_t last = -1000;
@@ -133,6 +146,7 @@ int main(int argc, char **argv)
         double back = g_h->vt_ms / speed;
         g_h->t0.tv_sec = now.tv_sec - (time_t)(back / 1000);
         g_h->t0.tv_nsec = now.tv_nsec;
+        g_h->hold_clock = false;
         g_h->wall_base = (int64_t)time(NULL) - g_h->vt_ms / 1000;
         g_h->stepped = false;
     }

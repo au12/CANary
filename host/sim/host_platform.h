@@ -13,6 +13,7 @@ typedef struct host_platform {
     cn_platform pf;
     simcar *car;
     bool stepped;        /* virtual clock: time only passes when the core waits */
+    bool hold_clock;     /* ignore attempts to set the time: used while replaying history, where a real server's clock would be wrong */
     double speed;        /* real-time factor when not stepped */
     int64_t vt_ms;
     struct timespec t0;

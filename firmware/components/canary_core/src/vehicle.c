@@ -663,16 +663,15 @@ static void dtc_add(cn_engine *e, const cn_dtc *d)
 /* Every trip log carries the trouble codes present during it. */
 static void log_dtc_event(cn_engine *e)
 {
+    /* the same shape as in a trip summary and a check-in, so every reader handles codes one way */
     cn_buf b;
     cn_buf_init(&b);
-    cn_buf_puts(&b, "{\"codes\":[");
-    for (int i = 0; i < e->ndtcs; i++) {
-        const cn_dtc *d = &e->dtcs[i];
-        const char *ecu = d->ecu != 0xFF && d->ecu < e->profile->necus ? e->profile->ecus[d->ecu].id : "obd";
-        cn_buf_printf(&b, "%s{\"code\":\"%s\",\"kind\":%d,\"ecu\":\"%s\",\"ftb\":%d,\"status\":%d}", i ? "," : "", d->code, d->kind,
-                      ecu, d->ftb, d->status);
-    }
-    cn_buf_puts(&b, "]}");
+    cn_jw w;
+    cn_jw_init(&w, &b);
+    cn_jw_obj(&w);
+    cn_jw_key(&w, "codes");
+    cn_json_dtcs(e, &w);
+    cn_jw_end_obj(&w);
     if (b.p) cn_trip_event(e, "dtc", b.p);
     cn_buf_free(&b);
     e->trip.dtc_logged = true;

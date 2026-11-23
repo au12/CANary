@@ -20,7 +20,7 @@
   },
   "signals": [
     { "id": "odometer",
-      "src": [ { "uds": "2203", "ecu": "cluster", "len": 24 }, { "uds": "10E0", "ecu": "engine", "len": 32 }, { "uds": "295A", "ecu": "engine", "len": 24 } ] },
+      "src": [ { "uds": "22B8", "ecu": "cluster", "len": 32, "div": 1000 }, { "uds": "2203", "ecu": "cluster", "len": 24 }, { "uds": "10E0", "ecu": "engine", "len": 32 }, { "uds": "295A", "ecu": "engine", "len": 24 } ] },
     { "id": "vbat_gateway", "name": "Battery voltage (gateway)", "unit": "V", "group": "electrical", "rate": "slow", "dec": 2, "min": 5, "max": 18,
       "src": [ { "uds": "105E", "ecu": "engine", "len": 16, "div": 50 } ] }
   ]
