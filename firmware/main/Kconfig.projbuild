@@ -1,0 +1,22 @@
+menu "CANary"
+
+    choice CANARY_BOARD
+        prompt "Board"
+        default CANARY_BOARD_WICAN_PRO
+        config CANARY_BOARD_WICAN_PRO
+            bool "MeatPi WiCAN Pro"
+        config CANARY_BOARD_GENERIC_S3
+            bool "Generic ESP32-S3 with a CAN transceiver"
+    endchoice
+
+    config CANARY_GENERIC_CAN_TX
+        int "CAN TX GPIO (generic board)"
+        depends on CANARY_BOARD_GENERIC_S3
+        default 5
+
+    config CANARY_GENERIC_CAN_RX
+        int "CAN RX GPIO (generic board)"
+        depends on CANARY_BOARD_GENERIC_S3
+        default 4
+
+endmenu
