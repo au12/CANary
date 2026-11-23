@@ -14,6 +14,7 @@
   --warn: #F08A24; --warn-text: #A85305; --warn-soft: #FDEEDD;
   --crit: #E5483B; --crit-text: #BD3327; --crit-soft: #FCE7E5;
   --hover: rgba(18, 26, 36, .055);
+  --lamp-ink: #FFFFFF;
   --focus: #1E64BA;
   --shadow: 0 1px 2px rgba(16, 24, 40, .05);
   --rail: 238px;
@@ -30,6 +31,7 @@
     --warn: #FF9A42; --warn-text: #FFAE66; --warn-soft: #38240F;
     --crit: #FF6457; --crit-text: #FF8278; --crit-soft: #3A1917;
     --hover: rgba(232, 237, 243, .06);
+    --lamp-ink: #0F1620;
     --focus: #7DBFFF;
     --shadow: 0 0 0 transparent;
   }
@@ -102,8 +104,12 @@ svg { flex: none; }
 .lamp svg { width: 17px; height: 17px; }
 .lamp.ok { background: var(--ok); }
 .lamp.adv { background: var(--adv); }
-.lamp.warn { background: var(--warn); border-radius: 7px; }
-.lamp.crit { background: var(--crit); border-radius: 7px; }
+/* Shape carries the meaning as much as colour does: a triangle warns, an octagon stops.
+   The same four markers are used in Glovebox's CANary section. */
+.lamp.warn, .lamp.crit { background: none; border-radius: 0; }
+.lamp.warn { color: var(--warn); }
+.lamp.crit { color: var(--crit); }
+.lamp.warn svg, .lamp.crit svg { width: 100%; height: 100%; }
 .lamp.wait, .lamp.off { background: none; color: var(--faint); box-shadow: inset 0 0 0 1.5px var(--line-strong); }
 @media (prefers-color-scheme: dark) { .lamp { color: #0F1620; } .lamp.wait, .lamp.off { color: var(--faint); } }
 
@@ -116,7 +122,7 @@ svg { flex: none; }
 .verdict.crit::before { background: var(--crit); }
 .verdict .lamp { width: 58px; height: 58px; grid-row: span 2; }
 .verdict .lamp svg { width: 36px; height: 36px; }
-.verdict .lamp.warn, .verdict .lamp.crit { border-radius: 14px; }
+.verdict .lamp.warn svg, .verdict .lamp.crit svg { width: 100%; height: 100%; }
 .verdict h1 { font: 600 clamp(30px, 5.2vw, 46px)/1.06 var(--display); letter-spacing: -.005em; align-self: end; }
 .verdict p { color: var(--muted); align-self: start; max-width: 60ch; }
 .verdict-facts { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, auto); justify-content: start; gap: 10px 40px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 15px; color: var(--muted); }

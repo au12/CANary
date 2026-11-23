@@ -25,7 +25,7 @@
 #include "driver/i2c_master.h"
 #endif
 
-static const char *TAG = "hal";
+static const char *TAG __attribute__((unused)) = "hal"; /* a board without the extras logs nothing here */
 
 #if BOARD_HAS_VBAT
 static adc_oneshot_unit_handle_t s_adc;

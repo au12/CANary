@@ -6,7 +6,7 @@
 typedef struct {
     /* fault injection; all zero = a healthy car */
     double boost_leak;      /* fraction of requested boost that never arrives (0.18 = worn diverter valve) */
-    double chain_stretch;   /* degrees of intake cam adaptation */
+    double chain_stretch;   /* degrees of learned intake cam offset (what a stretched chain shows as on older engines) */
     double idle_lean;       /* extra fuel trim at idle, percent (vacuum leak) */
     double knock_cyl3;      /* extra knock retard on cylinder 3, degrees */
     double misfire_rate;    /* misfires per minute on cylinder 2 */

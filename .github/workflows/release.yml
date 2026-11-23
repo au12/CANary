@@ -1,0 +1,99 @@
+name: Release
+
+# Publishes a GitHub release (and its tag) whenever the version in firmware/version.txt changes
+# on main and that version has no release yet. Release notes come from the matching
+# "## <version>" section of CHANGELOG.md. Versions below 1.0 and versions with a suffix
+# (0.3.0-rc1) are published as pre-releases.
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "firmware/version.txt"
+      - "CHANGELOG.md"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      create: ${{ steps.check.outputs.create }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(tr -d '[:space:]' < firmware/version.txt)
+          if [ -z "$version" ]; then echo "::error::firmware/version.txt is empty"; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version in source: $version"
+
+      - name: Is there a release for it already?
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release v$VERSION already exists, nothing to do."
+            echo "create=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          awk -v v="$VERSION" '
+            /^## [0-9]/ { if (found) exit; if ($2 == v) { found = 1; next } }
+            found
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## $VERSION' section. Add release notes before changing the version."
+            exit 1
+          fi
+          echo "create=true" >> "$GITHUB_OUTPUT"
+
+  # The same tests and firmware build every push gets; its artifact is what is published.
+  build:
+    needs: plan
+    if: needs.plan.outputs.create == 'true'
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download firmware
+        uses: actions/download-artifact@v8
+        with:
+          name: canary-firmware-wican-pro
+          path: dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          awk -v v="$VERSION" '
+            /^## [0-9]/ { if (found) exit; if ($2 == v) { found = 1; next } }
+            found
+          ' CHANGELOG.md > release-notes.md
+          case "$VERSION" in
+            0.*|*-*) kind="--prerelease" ;;
+            *)       kind="--latest" ;;
+          esac
+          ls -l dist
+          gh release create "v$VERSION" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "CANary $VERSION" --notes-file release-notes.md $kind
+          echo "Published v$VERSION at $GITHUB_SHA"

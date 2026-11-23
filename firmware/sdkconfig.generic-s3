@@ -1,0 +1,4 @@
+# Any ESP32-S3 board with a CAN transceiver: build with
+#   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.generic-s3" build
+# Set the two CAN pins under CANary in menuconfig if they differ from the defaults (TX 5, RX 4).
+CONFIG_CANARY_BOARD_GENERIC_S3=y

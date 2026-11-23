@@ -583,6 +583,16 @@ static void api_support(cn_engine *e, cn_api_resp *r)
     lock(e);
     cn_profile *p = e->profile;
     cn_jw_obj(&w);
+    /* enough to tell which car and which firmware this came from, without the serial part of the VIN */
+    char model[12];
+    snprintf(model, sizeof(model), "%.11s", e->vin);
+    cn_jw_kstr(&w, "fw", CN_FW_VERSION);
+    cn_jw_kstr(&w, "board", e->board);
+    cn_jw_kstr(&w, "vin_model", model);
+    cn_jw_kstr(&w, "profile", p->id);
+    cn_jw_kstr(&w, "profile_hash", p->hash);
+    cn_jw_kint(&w, "can_bitrate", e->can_bitrate);
+    cn_jw_kint(&w, "can_id_bits", e->can_ext ? 29 : 11);
     cn_jw_kint(&w, "learning", e->probe_pending);
     cn_jw_key(&w, "requests");
     cn_jw_arr(&w);

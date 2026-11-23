@@ -11,6 +11,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifndef MSG_NOSIGNAL /* macOS has no per-call flag; SIGPIPE is ignored for the whole process instead */
+#define MSG_NOSIGNAL 0
+#endif
+
 typedef struct {
     cn_engine *e;
     const char *web_dir;

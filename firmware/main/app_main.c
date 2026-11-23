@@ -100,8 +100,15 @@ static void housekeeping_task(void *arg)
         if (pressed) {
             held++;
             if (held == 20) {
+                /* CANary's own settings only: the stock firmware keeps its data in the same flash area,
+                   and someone who goes back to it should find it as they left it */
                 ESP_LOGW(TAG, "button held: settings reset");
-                nvs_flash_erase();
+                nvs_handle_t h;
+                if (nvs_open("canary", NVS_READWRITE, &h) == ESP_OK) {
+                    nvs_erase_all(h);
+                    nvs_commit(h);
+                    nvs_close(h);
+                }
                 esp_restart();
             }
         } else {

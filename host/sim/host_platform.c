@@ -12,6 +12,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifndef MSG_NOSIGNAL /* macOS has no per-call flag; SIGPIPE is ignored for the whole process instead */
+#define MSG_NOSIGNAL 0
+#endif
+
 static int64_t p_mono(void *ctx)
 {
     host_platform *h = ctx;

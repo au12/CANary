@@ -5,6 +5,7 @@
 #include "host_platform.h"
 #include "simcar.h"
 
+#include <dirent.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -219,6 +220,28 @@ static void test_profiles(void)
     char *index = host_profile_loader(PROFILES, CN_PROFILE_INDEX);
     CHECK(index && strstr(index, "\"vw-tiguan-mk2\"") && strstr(index, "Generic OBD-II"));
     free(index);
+
+    /* every profile that ships must load on its own, with every check it defines able to run */
+    DIR *dir = opendir(PROFILES);
+    struct dirent *de;
+    int shipped = 0;
+    while (dir && (de = readdir(dir))) {
+        size_t n = strlen(de->d_name);
+        if (n < 6 || strcmp(de->d_name + n - 5, ".json") != 0) continue;
+        char id[64];
+        snprintf(id, sizeof(id), "%.*s", (int)(n - 5), de->d_name);
+        cn_profile *q = cn_profile_load(id, host_profile_loader, PROFILES, err, sizeof(err));
+        if (!q) printf("  profile %s: %s\n", id, err);
+        CHECK(q != NULL);
+        for (int i = 0; q && i < q->nmonitors; i++) {
+            if (!q->monitors[i].enabled) printf("  profile %s, check %s: %s\n", id, q->monitors[i].id, q->monitors[i].why_disabled);
+            CHECK(q->monitors[i].enabled && q->monitors[i].nlevels > 0 && q->monitors[i].title[0]);
+        }
+        cn_profile_free(q);
+        shipped++;
+    }
+    if (dir) closedir(dir);
+    CHECK(shipped >= 4);
     cn_profile_free(g);
     cn_profile_free(t);
 }
@@ -550,7 +573,7 @@ static void test_healthy_drive(void)
         CHECK(m->status == CN_SEV_NODATA || m->status == CN_SEV_OK);
     }
     CHECK(mon(r.e, "boost_under_target")->status == CN_SEV_OK);
-    CHECK(mon(r.e, "chain_stretch_intake")->status == CN_SEV_OK);
+    CHECK(mon(r.e, "cam_adaptation_intake")->status == CN_SEV_OK);
     if (mon(r.e, "knock_retard")->status != CN_SEV_OK) printf("  knock n=%u result=%g\n", (unsigned)mon(r.e, "knock_retard")->n, mon(r.e, "knock_retard")->result);
     CHECK(mon(r.e, "knock_retard")->status == CN_SEV_OK);
     CHECK(mon(r.e, "charging_low")->status == CN_SEV_OK);
@@ -618,8 +641,8 @@ static void test_faulty_drive(void)
     cn_monitor *m;
     m = mon(r.e, "boost_under_target");
     CHECK(m->status >= CN_SEV_WARNING && m->result > 20);
-    m = mon(r.e, "chain_stretch_intake");
-    CHECK(m->status == CN_SEV_WARNING);
+    m = mon(r.e, "cam_adaptation_intake");
+    CHECK(m->status == CN_SEV_ADVISORY); /* 4.6 degrees: past the advisory mark, short of the 5 degree warning */
     CHECK_NEAR(m->result, 4.6, 0.05);
     m = mon(r.e, "fuel_trim_idle");
     CHECK(m->status >= CN_SEV_ADVISORY && m->result > 9);

@@ -1,4 +1,4 @@
-# CANary firmware (ESP-IDF 5.3+). Build with:  idf.py set-target esp32s3 && idf.py build
+# CANary firmware, developed and released with ESP-IDF 5.5.1. Build with:  idf.py build
 cmake_minimum_required(VERSION 3.16)
 
 file(READ "${CMAKE_CURRENT_LIST_DIR}/version.txt" CANARY_VERSION)

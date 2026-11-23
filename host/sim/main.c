@@ -14,6 +14,7 @@
 #include "host_platform.h"
 
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -65,6 +66,7 @@ static void *sync_thread(void *arg)
 
 int main(int argc, char **argv)
 {
+    signal(SIGPIPE, SIG_IGN); /* a server that hangs up mid-upload must not end the simulator */
     const char *state = "/tmp/canary-sim", *profiles = "profiles", *web = "firmware/web", *scenario = "worn";
     int port = 8088, minutes = 12, tz_min = 0, vehicle = 0;
     const char *glovebox = NULL, *key = NULL;
@@ -91,7 +93,7 @@ int main(int argc, char **argv)
     simcar_cfg cfg;
     memset(&cfg, 0, sizeof(cfg));
     if (!strcmp(scenario, "worn")) {
-        cfg.boost_leak = 0.19;
+        cfg.boost_leak = 0.21;
         cfg.chain_stretch = 4.3;
         cfg.idle_lean = 11;
         cfg.knock_cyl3 = 4.2;

@@ -739,7 +739,9 @@ const Trip = {
     if (s) {
       const avg = s.duration_s > 0 ? s.distance_km / (s.duration_s / 3600) : 0;
       const stats = [[dist(s.distance_km, 1), 'Distance'], [dur(s.duration_s), 'Duration'], [val(s.max_speed, 'km/h', 0), 'Top speed'], [val(avg, 'km/h', 0), 'Average speed']];
-      if (s.fuel_l > 0) stats.push([val(s.fuel_l, 'L', 1), 'Fuel used']);
+      /* economy first, the way Glovebox shows it; a drive too short for a meaningful figure just says how much fuel went */
+      if (s.fuel_l > 0.05 && s.distance_km >= 1) stats.push([S.imperial ? num(s.distance_km * 0.621371 / (s.fuel_l * 0.2641721), 1) + ' mpg' : num(s.fuel_l / s.distance_km * 100, 1) + ' L/100 km', val(s.fuel_l, 'L', 1) + ' used']);
+      else if (s.fuel_l > 0) stats.push([val(s.fuel_l, 'L', 1), 'Fuel used']);
       if (s.odo_end_km > 0) stats.push([dist(s.odo_end_km), 'Odometer']);
       html = `<h1 class="page-title">${esc(when(s.start))}</h1><p class="page-sub">${esc(s.vin || 'Unknown car')}, recorded with the ${esc((S.st && S.st.vehicle.profile.id === s.profile ? S.st.vehicle.profile.name : s.profile) || 'default')} profile.</p>
         <div class="stats" style="margin-top:16px">${stats.map(x => `<div><b>${esc(x[0])}</b>${x[1]}</div>`).join('')}</div>`;
@@ -1049,9 +1051,9 @@ const Device = {
         <label>API key<input class="field" name="api_key" type="password" autocomplete="off" placeholder="${g.api_key_set ? 'Saved. Type to replace it' : 'Paste the key'}"><small>Glovebox creates one for you on the vehicle’s CANary page. Leave empty if your Glovebox has no login.</small></label>
         <div class="row">
           <label>Vehicle number<input class="field" name="vehicle_id" type="number" min="1" inputmode="numeric" value="${g.vehicle_id || ''}"><small>Shown on the same page in Glovebox.</small></label>
-          <label>Odometer in Glovebox<select class="field" name="odometer_unit"><option value="mi"${g.odometer_unit === 'km' ? '' : ' selected'}>Miles</option><option value="km"${g.odometer_unit === 'km' ? ' selected' : ''}>Kilometres</option></select><small>Used only with plain LubeLogger.</small></label>
+          <label>Odometer unit<select class="field" name="odometer_unit"><option value="mi"${g.odometer_unit === 'km' ? '' : ' selected'}>Miles</option><option value="km"${g.odometer_unit === 'km' ? ' selected' : ''}>Kilometres</option></select><small>For a plain LubeLogger server. Glovebox keeps its own setting.</small></label>
         </div>
-        <label>Odometer correction<input class="field" name="odometer_offset" type="number" step="0.1" value="${g.odometer_offset || 0}"><small>Added to every reading, in the unit above. Use it if the instrument cluster was replaced.</small></label>
+        <label>Odometer correction<input class="field" name="odometer_offset" type="number" step="0.1" value="${g.odometer_offset || 0}"><small>Added to every reading sent to a plain LubeLogger server, for a car whose instrument cluster was replaced. With Glovebox, set it on the vehicle’s CANary page.</small></label>
         <label class="check"><input type="checkbox" name="upload_logs"${g.upload_logs ? ' checked' : ''}>Upload recorded drives for the weekly report</label>
         <div class="actions"><button class="btn primary">Save</button><button class="btn" type="button" data-act="sync">Sync now</button>${g.api_key_set ? '<button class="btn" type="button" data-act="key-clear">Forget the API key</button>' : ''}</div>
       </form></div>`;
@@ -1129,7 +1131,7 @@ const Device = {
   advanced() {
     return `<div class="section"><h2>What this car answers</h2>
       <p>CANary tries every request in the profile once and remembers which ones the car answers. This table is what to send along when a profile needs fixing.</p>
-      <div class="actions" style="margin-top:12px"><button class="btn small" data-act="support">Show the table</button></div><div id="dvSupport" class="scroll-x"></div></div>
+      <div class="actions" style="margin-top:12px"><button class="btn small" data-act="support">Show the table</button><a class="btn small" href="/api/support" download="canary-support.json">${icon('down')}Download it as a file</a></div><div id="dvSupport" class="scroll-x"></div></div>
       <div class="section"><h2>Ask a control unit directly</h2>
       <p>For working out a new car. Only read requests are allowed (services 01, 02, 03, 06, 07, 09, 0A, 19 and 22); anything that could change the car is refused.</p>
       <form class="form" data-form="diag">

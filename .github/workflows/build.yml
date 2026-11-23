@@ -1,0 +1,103 @@
+name: Build and test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The whole engine, run through simulated drives on a desktop.
+  engine:
+    name: Engine tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Linux is what releases are judged by; the macOS build tells contributors on a Mac where they stand.
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build
+        run: |
+          cmake -S host -B build-host
+          cmake --build build-host --parallel
+
+      - name: Test
+        run: build-host/canary-tests
+
+      - name: Generated documentation is up to date
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 tools/gen_checks_doc.py --check
+
+      - name: Simulator serves the interface after two simulated days
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          build-host/canary-sim --scenario worn --days 2 --port 8099 --state "$RUNNER_TEMP/sim" > "$RUNNER_TEMP/sim.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8099/api/status > status.json && break
+            sleep 1
+          done
+          python3 -c "import json; d = json.load(open('status.json')); assert d['trip']['count'] >= 2, d['trip']"
+          curl -sf http://127.0.0.1:8099/ | grep -q "<title>CANary</title>"
+
+  firmware:
+    name: Firmware (${{ matrix.board }})
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: wican-pro
+            defaults: "sdkconfig.defaults"
+          # compiled so that it keeps compiling; not part of releases
+          - board: generic-esp32s3
+            defaults: "sdkconfig.defaults;sdkconfig.generic-s3"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build
+        shell: bash
+        run: |
+          git config --global --add safe.directory '*'
+          . "$IDF_PATH/export.sh"
+          cd firmware
+          idf.py -D "SDKCONFIG_DEFAULTS=${{ matrix.defaults }}" build 2>&1 | tee build.log
+          if grep -q "warning:" build.log; then
+            echo "::error::The firmware must build without compiler warnings."
+            grep "warning:" build.log
+            exit 1
+          fi
+
+      # One file for the update page, one for flashing a blank or broken device over USB.
+      - name: Package
+        if: matrix.board == 'wican-pro'
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          version=$(tr -d '[:space:]' < firmware/version.txt)
+          mkdir -p dist
+          cp firmware/build/canary.bin "dist/canary-wican-pro-$version.bin"
+          (cd firmware/build && python -m esptool --chip esp32s3 merge_bin -o "$GITHUB_WORKSPACE/dist/canary-wican-pro-$version-usb.bin" @flash_args)
+          (cd dist && sha256sum canary-wican-pro-* > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Upload firmware
+        if: matrix.board == 'wican-pro'
+        uses: actions/upload-artifact@v7
+        with:
+          name: canary-firmware-wican-pro
+          path: dist/
+          if-no-files-found: error
