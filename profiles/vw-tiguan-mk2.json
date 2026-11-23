@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "id": "vw-tiguan-mk2",
+  "name": "Volkswagen Tiguan (2018+, 2.0 TSI)",
+  "description": "Second-generation Tiguan on the MQB platform with the EA888 Gen 3B 2.0 TSI.",
+  "extends": ["vw-ea888-gen3"],
+  "match": { "vin": ["3VV??7AX*", "3VV??7B?*", "WVG??7AX*", "WVG???5N*", "WVGZZZ5N*", "WVGZZZAX*"], "priority": 20 }
+}

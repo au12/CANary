@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "id": "vw-mqb",
+  "name": "Volkswagen Group MQB (base)",
+  "description": "Shared by MQB-platform Volkswagen, Audi, Škoda and SEAT models: control-unit addresses, instrument-cluster odometer and trouble-code sweep of the main modules. Engine data comes from an engine-family profile layered on top.",
+  "extends": ["generic-obd2"],
+  "match": { "vin": ["WVW*", "WVG*", "3VW*", "3VV*", "1VW*", "1V2*", "WAU*", "WA1*", "TRU*", "TMB*", "VSS*"], "priority": 5 },
+  "can": { "bitrate": 500000, "id_bits": 11 },
+  "ecus": {
+    "obd":      { "rx": "7E8" },
+    "engine":   { "tx": "7E0", "rx": "7E8", "name": "Engine", "dtc": true },
+    "trans":    { "tx": "7E1", "rx": "7E9", "name": "Transmission", "dtc": true },
+    "abs":      { "tx": "713", "rx": "77D", "name": "Brakes / ABS", "dtc": true },
+    "airbag":   { "tx": "715", "rx": "77F", "name": "Airbag", "dtc": true },
+    "steering": { "tx": "712", "rx": "77C", "name": "Power steering", "dtc": true },
+    "cluster":  { "tx": "714", "rx": "77E", "name": "Instrument cluster", "dtc": true },
+    "gateway":  { "tx": "710", "rx": "77A", "name": "Gateway", "dtc": true },
+    "bcm":      { "tx": "70E", "rx": "778", "name": "Body control", "dtc": true },
+    "hvac":     { "tx": "746", "rx": "7B0", "name": "Climate control", "dtc": true }
+  },
+  "signals": [
+    { "id": "odometer",
+      "src": [ { "uds": "2203", "ecu": "cluster", "len": 24 }, { "uds": "10E0", "ecu": "engine", "len": 32 }, { "uds": "295A", "ecu": "engine", "len": 24 } ] },
+    { "id": "vbat_gateway", "name": "Battery voltage (gateway)", "unit": "V", "group": "electrical", "rate": "slow", "dec": 2, "min": 5, "max": 18,
+      "src": [ { "uds": "105E", "ecu": "engine", "len": 16, "div": 50 } ] }
+  ]
+}

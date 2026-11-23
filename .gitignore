@@ -1,0 +1,14 @@
+# builds
+build/
+build-*/
+/firmware/sdkconfig
+/firmware/sdkconfig.old
+/firmware/managed_components/
+/firmware/dependencies.lock
+/firmware/main/generated/
+/host/build/
+# local state
+*.tmp
+.DS_Store
+__pycache__/
+node_modules/
