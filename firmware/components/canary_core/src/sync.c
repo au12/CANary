@@ -67,12 +67,22 @@ static bool looks_like_html(const cn_http_resp *r)
     return *p == '<';
 }
 
-static const char *explain(int status, const cn_http_resp *r)
+static bool is_redirect(int status) { return status == 301 || status == 302 || status == 303 || status == 307 || status == 308; }
+
+/* Glovebox and LubeLogger answer a missing or wrong key by sending the caller to their login page. */
+static bool sent_to_login(int status, const cn_http_resp *r)
+{
+    if (is_redirect(status)) return !r->location[0] || strstr(r->location, "ogin") != NULL;
+    return status == 200 && looks_like_html(r);
+}
+
+static const char *explain(const cn_engine *e, int status, const cn_http_resp *r)
 {
     if (status < 0) return "server not reachable";
     if (status == 401 || status == 403) return "API key rejected (needs the Editor role)";
+    if (sent_to_login(status, r)) return e->cfg.gb_api_key[0] ? "the server asked for a login: the API key was not accepted" : "the server asked for a login: it needs an API key";
+    if (is_redirect(status)) return !strncmp(r->location, "https://", 8) ? "the server moved to https: start the address with https://" : "the server redirects elsewhere: check the address";
     if (status == 404) return "not found (check the server address and vehicle)";
-    if (status == 200 && looks_like_html(r)) return "got the login page; check the API key";
     return "unexpected reply";
 }
 
@@ -85,9 +95,9 @@ static int detect_mode(cn_engine *e)
     if (st == 200 && !looks_like_html(&r) && r.body && strstr(r.body, "canary_api")) {
         mode = CN_SYNC_CANARY;
     } else if (st < 0) {
-        set_error(e, "%s", explain(st, &r));
-    } else if (st == 401 || st == 403) {
-        set_error(e, "%s", explain(st, &r));
+        set_error(e, "%s", explain(e, st, &r));
+    } else if (st == 401 || st == 403 || is_redirect(st) || sent_to_login(st, &r)) {
+        set_error(e, "%s", explain(e, st, &r));
     } else {
         /* no CANary endpoints: is it at least a LubeLogger-compatible server? */
         free(r.body);
@@ -97,7 +107,7 @@ static int detect_mode(cn_engine *e)
         if (st == 200 && !looks_like_html(&r))
             mode = CN_SYNC_LUBELOGGER;
         else
-            set_error(e, "%s", explain(st, &r));
+            set_error(e, "%s", explain(e, st, &r));
     }
     free(r.body);
     return mode;
@@ -112,7 +122,7 @@ static bool odometer_lubelogger(cn_engine *e, double odo_km)
     snprintf(path, sizeof(path), "/api/vehicle/odometerrecords/latest?vehicleId=%d", e->cfg.gb_vehicle_id);
     int st = request(e, "GET", path, NULL, NULL, 0, &r);
     if (st != 200 || looks_like_html(&r)) {
-        set_error(e, "odometer: %s", explain(st, &r));
+        set_error(e, "odometer: %s", explain(e, st, &r));
         free(r.body);
         return false;
     }
@@ -132,7 +142,7 @@ static bool odometer_lubelogger(cn_engine *e, double odo_km)
     snprintf(path, sizeof(path), "/api/vehicle/odometerrecords/add?vehicleId=%d", e->cfg.gb_vehicle_id);
     st = request(e, "POST", path, "application/json", body, (size_t)n, &r);
     bool ok = st == 200 && !looks_like_html(&r) && !(r.body && strstr(r.body, "\"success\":false"));
-    if (!ok) set_error(e, "odometer: %s", explain(st, &r));
+    if (!ok) set_error(e, "odometer: %s", explain(e, st, &r));
     free(r.body);
     if (ok) cn_log(e, 'i', "Odometer sent: %ld %s", value, miles ? "mi" : "km");
     return ok;
@@ -206,7 +216,7 @@ static bool checkin(cn_engine *e, bool *have_profile)
         }
         cJSON_Delete(d);
     } else {
-        set_error(e, "check-in: %s", explain(st, &r));
+        set_error(e, "check-in: %s", explain(e, st, &r));
     }
     free(r.body);
     return ok;
@@ -260,7 +270,7 @@ static bool upload_trip(cn_engine *e, const cn_trip_info *ti)
     snprintf(path, sizeof(path), "/api/canary/trips/%s/status?vehicleId=%d", ti->id, e->cfg.gb_vehicle_id);
     int st = request(e, "GET", path, NULL, NULL, 0, &r);
     long offset = st == 200 && !looks_like_html(&r) ? json_long(r.body, "received", 0) : -1;
-    if (offset < 0) set_error(e, "trip upload: %s", explain(st, &r));
+    if (offset < 0) set_error(e, "trip upload: %s", explain(e, st, &r));
     free(r.body);
     if (offset < 0) {
         fclose(f);
@@ -294,7 +304,7 @@ static bool upload_trip(cn_engine *e, const cn_trip_info *ti)
                  e->cfg.gb_vehicle_id, offset, total, (unsigned)cn_crc32(0, buf, n), e->device_id, start);
         st = request(e, "POST", path, "application/octet-stream", buf, n, &r);
         if (st != 200 || looks_like_html(&r)) {
-            set_error(e, "trip upload: %s", explain(st, &r));
+            set_error(e, "trip upload: %s", explain(e, st, &r));
             ok = false;
         } else {
             long received = json_long(r.body, "received", -1);

@@ -27,6 +27,9 @@ struct simcar {
     bool loop;
     double script_len;
     double phase; /* script time at t = 0 */
+    int seg_i;        /* segment the script is in, and when it began (script time) */
+    double seg_t0;
+    bool natural;     /* everyday driving: speed wanders, the weather changes, the tank gets refilled */
     double t;
     uint32_t rng;
     /* state */
@@ -89,37 +92,73 @@ void simcar_script(simcar *c, const simcar_seg *segs, int n, bool loop)
     c->nsegs = n;
     c->loop = loop;
     c->script_len = 0;
+    c->seg_i = 0;
+    c->seg_t0 = 0;
+    c->natural = false;
     for (int i = 0; i < n; i++) c->script_len += segs[i].seconds;
 }
 
-/* One drive, key-on to key-off. Returns the number of segments written. */
-static int drive_segments(simcar_seg *out, int minutes)
+enum { DRIVE_COMMUTE, DRIVE_TOWN, DRIVE_MOTORWAY };
+
+/* One drive, key-on to key-off; returns the number of segments written. `v` (-1..1) moves speeds
+ * and waits a little, so that no two days look alike. */
+static int drive_segments(simcar_seg *out, int minutes, int kind, double v)
 {
-    double cruise = minutes * 60.0 - 430;
-    if (cruise < 60) cruise = 60;
-    const simcar_seg s[] = {
-        {4, 0, 0, true},               /* key on */
-        {35, 0, 0, false},             /* idle */
-        {45, 48, 0, false},            /* pull away */
-        {18, 0, 0, false},             /* lights */
-        {70, 62, 0, false},
-        {14, 0, 0, false},
-        {9, 120, 100, false},          /* on-ramp, full throttle */
-        {cruise * 0.45, 108, 0, false},
-        {16, 0, 0, false},             /* roadworks, stopped */
-        {26, 0, 0, false},
-        {9, 118, 90, false},
-        {7, 135, 100, false},          /* overtake */
-        {cruise * 0.55, 110, 0, false},
-        {9, 132, 78, false},           /* pass a truck */
-        {25, 100, 0, false},
-        {30, 55, 0, false},
-        {10, 95, 85, false},           /* brisk pull */
-        {60, 45, 0, false},
-        {50, 0, 0, false},             /* arrive, idle */
-    };
-    int n = (int)(sizeof(s) / sizeof(s[0]));
-    memcpy(out, s, sizeof(s));
+    int n = 0;
+#define SEG(sec, kmh, ped) out[n++] = (simcar_seg){(sec), (kmh), (ped), false}
+    out[n++] = (simcar_seg){4, 0, 0, true}; /* key on */
+    if (kind == DRIVE_TOWN) {
+        double body = fmax(60, minutes * 60.0 - 150);
+        SEG(22 + 6 * v, 0, 0);          /* idle */
+        SEG(40, 42 + 4 * v, 0);
+        SEG(16, 0, 0);                  /* lights */
+        SEG(body * 0.4, 55 + 5 * v, 0);
+        SEG(12 + 6 * v, 0, 0);          /* junction */
+        SEG(8, 78, 72);                 /* brisk pull onto the main road */
+        SEG(body * 0.6, 62 - 4 * v, 0);
+        SEG(20, 30, 0);                 /* car park */
+        SEG(28, 0, 0);                  /* arrive, idle */
+    } else if (kind == DRIVE_MOTORWAY) {
+        double cruise = fmax(120, minutes * 60.0 - 372);
+        SEG(28, 0, 0);
+        SEG(45, 48, 0);
+        SEG(20, 0, 0);                  /* lights */
+        SEG(60, 64, 0);
+        SEG(9, 122, 100);               /* on-ramp, full throttle */
+        SEG(cruise * 0.30, 116 + 5 * v, 0);
+        SEG(7, 132 + 6 * v, 100);       /* overtake */
+        SEG(cruise * 0.25, 120 + 4 * v, 0);
+        SEG(40, 88, 0);                 /* traffic */
+        SEG(8, 124, 92);
+        SEG(cruise * 0.30, 118 - 3 * v, 0);
+        SEG(9, 134 + 4 * v, 80);        /* pass a truck */
+        SEG(cruise * 0.15, 112, 0);
+        SEG(30, 60, 0);                 /* exit */
+        SEG(22, 0, 0);                  /* lights */
+        SEG(50, 48, 0);
+        SEG(40, 0, 0);                  /* arrive, idle */
+    } else {
+        double cruise = fmax(60, minutes * 60.0 - 432);
+        SEG(30 + 8 * v, 0, 0);          /* idle */
+        SEG(45, 48 + 3 * v, 0);         /* pull away */
+        SEG(18 - 6 * v, 0, 0);          /* lights */
+        SEG(70, 62 - 4 * v, 0);
+        SEG(14, 0, 0);
+        SEG(9, 120, 100);               /* on-ramp, full throttle */
+        SEG(cruise * 0.45, 108 + 5 * v, 0);
+        SEG(16 + 10 * v, 0, 0);         /* roadworks, stopped */
+        SEG(26, 0, 0);
+        SEG(9, 118, 90);
+        SEG(7, 126 + 8 * v, 100);       /* overtake */
+        SEG(cruise * 0.55, 110 - 4 * v, 0);
+        SEG(9, 128 + 4 * v, 78);        /* pass a truck */
+        SEG(25, 100, 0);
+        SEG(30, 55, 0);
+        SEG(10, 95, 85);                /* brisk pull */
+        SEG(60, 45, 0);
+        SEG(50 - 10 * v, 0, 0);         /* arrive, idle */
+    }
+#undef SEG
     return n;
 }
 
@@ -130,23 +169,51 @@ static double segments_len(const simcar_seg *s, int n)
     return t;
 }
 
-void simcar_script_daily(simcar *c, double phase_s)
+/* A fortnight of ordinary use, looping: the weekday commute (never quite at the same minute), a
+ * lunchtime errand midweek, a longer Friday, a motorway trip on Saturday and a short run to the shops on Sunday. */
+void simcar_script_daily(simcar *c, double local_unix_s)
 {
-    simcar_seg s[64];
+    enum { DAYS = 14 };
+    typedef struct { int hour, minute, minutes, kind; } outing;
+    simcar_seg *s = malloc(sizeof(simcar_seg) * (DAYS * 4 * 20 + 2));
     int n = 0;
-    const double morning = 7 * 3600 + 38 * 60, evening = 17 * 3600 + 12 * 60;
-    s[n++] = (simcar_seg){morning, -1, 0, false};
-    int a = drive_segments(s + n, 12);
-    double used = morning + segments_len(s + n, a);
-    n += a;
-    s[n++] = (simcar_seg){evening - used, -1, 0, false};
-    int b = drive_segments(s + n, 15);
-    used = evening + segments_len(s + n, b);
-    n += b;
-    s[n++] = (simcar_seg){86400 - used, -1, 0, false};
+    double used = 0;
+    for (int d = 0; d < DAYS; d++) {
+        int wd = d % 7; /* 0 = Monday */
+        outing plan[4];
+        int np = 0;
+        if (wd <= 4) {
+            plan[np++] = (outing){7, 38, 12, DRIVE_COMMUTE};
+            if (wd == 2) {
+                plan[np++] = (outing){12, 24, 7, DRIVE_TOWN};
+                plan[np++] = (outing){12, 58, 8, DRIVE_TOWN};
+            }
+            plan[np++] = (outing){17, 12, wd == 4 ? 23 : 15, DRIVE_COMMUTE};
+        } else if (wd == 5) {
+            plan[np++] = (outing){10, 15, 41, DRIVE_MOTORWAY};
+            plan[np++] = (outing){15, 48, 38, DRIVE_MOTORWAY};
+        } else {
+            plan[np++] = (outing){11, 5, 8, DRIVE_TOWN};
+            plan[np++] = (outing){11, 52, 9, DRIVE_TOWN};
+        }
+        for (int i = 0; i < np; i++) {
+            double k = d * 4 + i;
+            double v = sin(k * 2.399 + 0.7);
+            double start = d * 86400.0 + plan[i].hour * 3600 + plan[i].minute * 60 + lround(8 * sin(k * 1.37 + 2)) * 60;
+            int minutes = plan[i].minutes + (plan[i].kind == DRIVE_TOWN ? 0 : (int)lround(2 * sin(k * 1.93)));
+            s[n++] = (simcar_seg){start - used, -1, 0, false};
+            int m = drive_segments(s + n, minutes, plan[i].kind, v);
+            used = start + segments_len(s + n, m);
+            n += m;
+        }
+    }
+    s[n++] = (simcar_seg){DAYS * 86400.0 - used, -1, 0, false};
     simcar_script(c, s, n, true);
-    c->phase = fmod(phase_s, 86400);
-    if (c->phase < 0) c->phase += 86400;
+    free(s);
+    c->natural = true;
+    /* 1 January 1970 was a Thursday: three days on, the count of days is a multiple of seven on Mondays */
+    c->phase = fmod(local_unix_s + 3 * 86400.0, DAYS * 86400.0);
+    if (c->phase < 0) c->phase += DAYS * 86400.0;
 }
 
 void simcar_script_commute(simcar *c, int minutes, bool loop)
@@ -189,11 +256,24 @@ static const simcar_seg *segment_at(simcar *c, double t)
         t = fmod(t, c->script_len);
     else if (t >= c->script_len)
         return &off;
-    for (int i = 0; i < c->nsegs; i++) {
-        if (t < c->segs[i].seconds) return &c->segs[i];
-        t -= c->segs[i].seconds;
+    /* time only moves forward, so carry on from the segment found last time */
+    if (t < c->seg_t0) {
+        c->seg_i = 0;
+        c->seg_t0 = 0;
     }
-    return &off;
+    while (c->seg_i < c->nsegs - 1 && t >= c->seg_t0 + c->segs[c->seg_i].seconds) {
+        c->seg_t0 += c->segs[c->seg_i].seconds;
+        c->seg_i++;
+    }
+    return &c->segs[c->seg_i];
+}
+
+/* Outside temperature: constant in a scripted test, a daily swing and changing weather in everyday use. */
+static double ambient(simcar *c)
+{
+    if (!c->natural) return c->cfg.ambient_c;
+    double local = c->t + c->phase;
+    return c->cfg.ambient_c + 4.5 * sin((fmod(local, 86400.0) / 3600.0 - 9) / 24.0 * 2 * 3.14159265358979) + 2.5 * sin(floor(local / 86400.0) * 1.3);
 }
 
 static void step(simcar *c)
@@ -202,7 +282,7 @@ static void step(simcar *c)
     bool was_running = c->running;
     c->ign = sg->speed >= 0;
     c->running = c->ign && !sg->engine_off_ign_on;
-    double amb = c->cfg.ambient_c;
+    double amb = ambient(c);
     if (c->running && !was_running) {
         c->run_time = 0;
         memset(c->misfire, 0, sizeof(c->misfire));
@@ -221,12 +301,14 @@ static void step(simcar *c)
         double rest = 12.45 + 0.45 * exp(-c->off_for / 90.0);
         c->vbat += ((c->ign ? rest - 0.25 : rest) - c->vbat) * DT / 2.0;
         c->fuel_rate = 0;
+        if (c->natural && !c->ign && c->fuel_level < 12) c->fuel_level = 96; /* someone filled up */
         return;
     }
     c->off_for = 0;
     c->run_time += DT;
     /* longitudinal */
     double target = sg->speed, acc;
+    if (c->natural && sg->pedal <= 0 && target > 25) target += 2.0 * sin(c->t / 17.0) + 1.2 * sin(c->t / 5.3 + 1.0); /* nobody holds a speed exactly */
     if (sg->pedal > 0) {
         c->pedal = c->speed < target ? sg->pedal : 20;
         acc = c->speed < target ? 3.0 * sg->pedal / 100.0 : 0;
@@ -287,7 +369,12 @@ static void step(simcar *c)
     c->rail_target = at_idle ? 5200 : 6500 + c->load * 150;
     c->rail_actual = c->rail_target * (0.985 + frand(c) * 0.03);
     c->lp_fuel = 505 + frand(c) * 30;
-    c->fuel_rate = 0.7 + c->load / 100.0 * c->rpm / 1000.0 * 4.2;
+    /* fuel follows the work done: rolling and air drag for a 1750 kg SUV, plus whatever the acceleration costs */
+    double mps = c->speed / 3.6;
+    double wheel_kw = ((190 + 0.51 * mps * mps) * mps + (acc > 0 ? 1750 * acc * mps : 0)) / 1000.0;
+    bool overrun = c->pedal < 1 && c->speed > 15; /* fuel is cut while coasting in gear */
+    double cold = 1 + clampd((70 - c->coolant) / 70.0, 0, 1) * 0.55; /* a cold engine runs rich and drags */
+    c->fuel_rate = overrun ? 0 : (0.75 + clampd(wheel_kw / 0.9 + 1.5, 0, 137) * 0.33) * cold;
     c->fuel_level = fmax(2, c->fuel_level - c->fuel_rate * DT / 3600.0 / 58.0 * 100.0);
     /* valve timing */
     c->cam_in_t = clampd(c->load * 0.32, 0, 30);
@@ -479,7 +566,7 @@ static int obd_pid(simcar *c, uint8_t pid, uint8_t *o)
     case 0x33: o[0] = (uint8_t)BARO; return 1;
     case 0x42: return u16(o, c->vbat * 1000);
     case 0x44: return u16(o, 32768);
-    case 0x46: o[0] = (uint8_t)lround(c->cfg.ambient_c + 40); return 1;
+    case 0x46: o[0] = (uint8_t)lround(ambient(c) + 40); return 1;
     case 0x49: o[0] = (uint8_t)lround(c->pedal * 2.55); return 1;
     case 0x5C: o[0] = (uint8_t)lround(c->oil + 40); return 1;
     case 0x5E: return u16(o, c->fuel_rate * 20);

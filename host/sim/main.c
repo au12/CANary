@@ -7,8 +7,8 @@
  *              [--glovebox URL --vehicle N [--key KEY]]
  *
  * --fast-forward runs that much history flat out before serving, ending at the present moment.
- * --days N does the same for N days of a morning and an evening drive (a commuter's fortnight in
- * a few seconds), with the car's faults growing by --wear percent a day.
+ * --days N does the same for N days of ordinary use (weekday commutes, errands, a motorway trip
+ * at the weekend), with the car's faults growing by --wear percent a day.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "host_platform.h"
@@ -107,7 +107,7 @@ int main(int argc, char **argv)
     simcar *car = simcar_create(&cfg);
     int64_t start_wall = (int64_t)time(NULL) - (int64_t)ff;
     if (days > 0)
-        simcar_script_daily(car, (double)((start_wall + tz_min * 60) % 86400));
+        simcar_script_daily(car, (double)(start_wall + tz_min * 60));
     else
         simcar_script_commute(car, minutes, true);
     g_h = host_platform_create(car, state, ff > 0);

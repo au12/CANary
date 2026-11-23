@@ -38,8 +38,9 @@ typedef struct {
 void simcar_script(simcar *c, const simcar_seg *segs, int n, bool loop);
 /* Built-in scripts */
 void simcar_script_commute(simcar *c, int minutes, bool loop);
-/* A looping 24-hour day with a morning and an evening drive. phase_s is the time of day at t = 0. */
-void simcar_script_daily(simcar *c, double phase_s);
+/* A looping fortnight of ordinary use: weekday commutes, errands, a motorway trip at the weekend.
+ * local_unix_s is the local time at t = 0 (seconds since 1970), which decides the weekday. */
+void simcar_script_daily(simcar *c, double local_unix_s);
 
 /* advance the model to absolute time t (seconds) */
 void simcar_advance(simcar *c, double t);

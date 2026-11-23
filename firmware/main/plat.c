@@ -178,6 +178,7 @@ static uint32_t p_random(void *ctx) { return esp_random(); }
 typedef struct {
     cn_buf body;
     int64_t date;
+    char location[96];
 } http_ctx;
 
 static int64_t parse_http_date(const char *s)
@@ -200,6 +201,8 @@ static esp_err_t http_event(esp_http_client_event_t *ev)
     http_ctx *c = ev->user_data;
     if (ev->event_id == HTTP_EVENT_ON_HEADER && !strcasecmp(ev->header_key, "Date")) {
         c->date = parse_http_date(ev->header_value);
+    } else if (ev->event_id == HTTP_EVENT_ON_HEADER && !strcasecmp(ev->header_key, "Location")) {
+        cn_strlcpy(c->location, ev->header_value, sizeof(c->location));
     } else if (ev->event_id == HTTP_EVENT_ON_DATA && ev->data_len > 0 && c->body.len < 64 * 1024) {
         cn_buf_put(&c->body, ev->data, (size_t)ev->data_len);
     }
@@ -214,7 +217,10 @@ static int p_http(void *ctx, const cn_http_req *req, cn_http_resp *resp)
     cn_buf_init(&hc.body);
     esp_http_client_config_t cfg = {.url = req->url, .timeout_ms = req->timeout_ms > 0 ? req->timeout_ms : 15000, .event_handler = http_event,
                                     .user_data = &hc, .crt_bundle_attach = esp_crt_bundle_attach, .buffer_size = 2048,
-                                    .buffer_size_tx = 1024, .keep_alive_enable = false};
+                                    .buffer_size_tx = 1024, .keep_alive_enable = false,
+                                    /* a redirect is reported to the core, which explains it; following one would
+                                       turn an upload into a request for a login page */
+                                    .disable_auto_redirect = true};
     esp_http_client_handle_t cl = esp_http_client_init(&cfg);
     if (!cl) return -1;
     esp_http_client_set_method(cl, !strcmp(req->method, "POST") ? HTTP_METHOD_POST : !strcmp(req->method, "PUT") ? HTTP_METHOD_PUT : HTTP_METHOD_GET);
@@ -230,6 +236,7 @@ static int p_http(void *ctx, const cn_http_req *req, cn_http_resp *resp)
     if (err == ESP_OK) {
         resp->status = esp_http_client_get_status_code(cl);
         resp->server_time = hc.date;
+        cn_strlcpy(resp->location, hc.location, sizeof(resp->location));
         resp->body_len = hc.body.len;
         resp->body = cn_buf_take(&hc.body);
         rc = 0;

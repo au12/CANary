@@ -97,6 +97,7 @@ typedef struct {
     char *body;  /* malloc'd, NUL terminated (may be NULL) */
     size_t body_len;
     int64_t server_time; /* from Date header when available, else 0 */
+    char location[96];   /* where a redirect points; redirects are reported, never followed */
 } cn_http_resp;
 
 typedef struct cn_platform {

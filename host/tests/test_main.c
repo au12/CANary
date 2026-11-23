@@ -315,6 +315,8 @@ static void test_monitor_math(void)
 
 typedef struct {
     bool canary_api, reject_key;
+    bool login_redirect; /* answer a bad key the way Glovebox does: with a redirect to its login page */
+    const char *redirect_to;
     double latest_mi;
     int odo_posts, checkins, profile_puts, chunk_posts;
     double last_checkin_km;
@@ -343,7 +345,11 @@ static int fake_http(void *ctx, const cn_http_req *req, cn_http_resp *r)
     if (!path) return -1;
     r->server_time = g->server_time;
     if (g->reject_key || !req->api_key || strcmp(req->api_key, "secret") != 0) {
-        reply(r, 401, "{\"success\":false}");
+        if (g->login_redirect) {
+            reply(r, 302, "");
+            cn_strlcpy(r->location, g->redirect_to ? g->redirect_to : "/Login/Index", sizeof(r->location));
+        } else
+            reply(r, 401, "{\"success\":false}");
         return 0;
     }
     char q[64];
@@ -748,6 +754,18 @@ static void test_clock_and_errors(void)
     CHECK(r.e->ntrips == 1);
     CHECK(r.e->sync.last_error[0] != 0 && strstr(r.e->sync.last_error, "API key"));
     CHECK(r.e->trips[0].uploaded_at == 0);
+    /* a server that answers with its login page instead of a refusal gets the same plain explanation */
+    r.gb.login_redirect = true;
+    r.e->sync.last_error[0] = 0;
+    rig_run(&r, 12 * 60 + 160, true);
+    CHECK(strstr(r.e->sync.last_error, "asked for a login") && strstr(r.e->sync.last_error, "API key"));
+    CHECK(r.e->trips[0].uploaded_at == 0);
+    /* and a reverse proxy that insists on https is named for what it is */
+    r.gb.redirect_to = "https://gb.test/api/canary/hello";
+    r.e->sync.last_error[0] = 0;
+    rig_run(&r, 12 * 60 + 200, true);
+    CHECK(strstr(r.e->sync.last_error, "https://"));
+    r.gb.login_redirect = false;
     /* the server's Date header still set the clock, so the trip got a real start time */
     CHECK(r.h->wall_base != 0);
     r.gb.reject_key = false;

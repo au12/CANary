@@ -320,6 +320,14 @@ int host_http_request(void *ctx, const cn_http_req *req, cn_http_resp *resp)
     *hdr_end = 0;
     char *date = strcasestr(in.p, "\r\nDate:");
     if (date) resp->server_time = parse_http_date(date + 7 + strspn(date + 7, " "));
+    char *loc = strcasestr(in.p, "\r\nLocation:");
+    if (loc) {
+        loc += 11 + strspn(loc + 11, " ");
+        size_t ll = strcspn(loc, "\r\n");
+        if (ll >= sizeof(resp->location)) ll = sizeof(resp->location) - 1;
+        memcpy(resp->location, loc, ll);
+        resp->location[ll] = 0;
+    }
     bool chunked = strcasestr(in.p, "Transfer-Encoding: chunked") != NULL;
     char *body = hdr_end + 4;
     size_t blen = in.len - (size_t)(body - in.p);
