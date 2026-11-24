@@ -106,8 +106,14 @@ That file contains the bootloader, the partition table and the firmware in one i
 esptool.py --chip esp32s3 write_flash 0x0 canary-wican-pro-<version>-usb.bin
 ```
 
-Flashing at `0x0` leaves the settings of both firmwares alone. Erasing the whole flash first
-removes them.
+Flashing this file resets CANary's settings. The image is one continuous block from `0x0` to the
+end of the firmware, so it also covers the settings area at `0x9000` and erases it: Wi-Fi
+networks, Glovebox connection and page password are gone, as after holding the button for ten
+seconds, and you go through **First setup** again. Recorded drives on the SD card are kept.
+
+It also puts CANary in the first firmware slot, which is usually where the stock firmware was.
+To go back to stock afterwards, upload MeatPi's file under **Device > System** as described above.
+Erasing the whole flash first removes everything, including the stock firmware's own storage.
 
 ## If something is not right
 
