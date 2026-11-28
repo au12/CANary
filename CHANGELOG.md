@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1
+
+Fixes from a full review before the first drive. Install it in place of 0.1.0
+(`canary-wican-pro-0.1.1.bin` on the stock **System** tab, or **Device > System** on CANary).
+
+- A drive cut short by a power loss or crash is finished on the next start and uploaded,
+  instead of staying on the SD card for good.
+- Recording, uploading and clean-up no longer step on each other when they happen at once.
+- More than 240 drives on the card: the oldest are removed instead of piling up unseen.
+- Wi-Fi: hidden networks, WPA3-only routers, and a captive portal that works with phones
+  that add extras to their DNS questions. The rescue network only opens while your Wi-Fi
+  settings have never worked, not on every drive.
+- Local dates follow daylight saving time (Glovebox tells the device the current offset).
+- A request that collides with another module on a busy bus is retried.
+- Power page: the unused "sleep below" setting is gone; "wake above" is kept within 12.8–14.4 V.
+
 ## 0.1.0
 
 The first public build. It runs and is tested against a simulated car and builds for the

@@ -19,7 +19,7 @@
 
 ![Live data](docs/screenshots/device-live-dark.png)
 
-> **Where this stands.** Version 0.1.0 is the first public build. Everything here runs and is tested against a simulated car, and the firmware builds for the WiCAN Pro, but it has not yet completed its first drive in a real one. The standard OBD-II readings follow the published standard. The Volkswagen-specific ones come from a community database and still have to be confirmed on the car. Expect rough edges, and see [what is tested and what is not](#what-is-tested-and-what-is-not).
+> **Where this stands.** Version 0.1.1 is the first public build. Everything here runs and is tested against a simulated car, and the firmware builds for the WiCAN Pro, but it has not yet completed its first drive in a real one. The standard OBD-II readings follow the published standard. The Volkswagen-specific ones come from a community database and still have to be confirmed on the car. Expect rough edges, and see [what is tested and what is not](#what-is-tested-and-what-is-not).
 
 ## What it does
 
