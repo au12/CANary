@@ -1081,10 +1081,7 @@ const Device = {
       <p style="margin-top:14px">CANary stays plugged in. To protect the battery it goes to sleep when the car is off and wakes when the alternator lifts the voltage. While asleep it sends nothing on the car’s network and this page is unreachable.</p>
       <form class="form" data-form="power">
         <label class="check"><input type="checkbox" name="sleep_enabled"${p.sleep_enabled ? ' checked' : ''}>Sleep when the car is off</label>
-        <div class="row">
-          <label>Sleep below<input class="field" name="sleep_voltage" type="number" step="0.1" min="11.5" max="14.5" value="${p.sleep_voltage}"><small>Volts. A resting battery is about 12.6.</small></label>
-          <label>Wake above<input class="field" name="wake_voltage" type="number" step="0.1" min="12" max="15" value="${p.wake_voltage}"><small>Volts. A charging system is about 14.</small></label>
-        </div>
+        <label>Wake above<input class="field" name="wake_voltage" type="number" step="0.1" min="12.8" max="14.4" value="${p.wake_voltage}"><small>Volts. A resting battery is about 12.6, a running engine about 14.</small></label>
         <label>Stay awake after the engine stops<input class="field" name="sleep_delay_min" type="number" min="1" max="60" value="${Math.round(p.sleep_delay_s / 60)}"><small>Minutes. Long enough to reach Wi-Fi and finish uploading.</small></label>
         <div class="actions"><button class="btn primary">Save</button></div>
       </form></div>`;
@@ -1172,7 +1169,7 @@ view.addEventListener('submit', async e => {
         Device.draw('vehicle');
       }
     } else if (kind === 'power') {
-      await saveConfig({ power: { sleep_enabled: f.get('sleep_enabled') === 'on', sleep_voltage: +get('sleep_voltage'), wake_voltage: +get('wake_voltage'), sleep_delay_s: Math.round(+get('sleep_delay_min') * 60) } });
+      await saveConfig({ power: { sleep_enabled: f.get('sleep_enabled') === 'on', wake_voltage: +get('wake_voltage'), sleep_delay_s: Math.round(+get('sleep_delay_min') * 60) } });
       Device.draw('power');
     } else if (kind === 'storage') {
       if (await saveConfig({ log: { enabled: f.get('enabled') === 'on', retention_days: +get('retention_days') } })) Device.draw('storage');

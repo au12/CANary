@@ -14,6 +14,10 @@
 #define MIN_TRIP_S 20
 #define MIN_TRIP_SAMPLES 50
 
+/* Trip operations come from several tasks; the engine's lock is recursive. */
+static void tlock(cn_engine *e) { if (e->pf.lock) e->pf.lock(e->pf.ctx); }
+static void tunlock(cn_engine *e) { if (e->pf.unlock) e->pf.unlock(e->pf.ctx); }
+
 static const char *data_dir(cn_engine *e) { return e->pf.data_dir ? e->pf.data_dir(e->pf.ctx) : NULL; }
 
 char *cn_trip_path(cn_engine *e, const char *trip_id, const char *ext)
@@ -127,20 +131,48 @@ static char *summary_json(cn_engine *e, const cn_trip_info *ti, const char *reas
     return cn_buf_take(&b);
 }
 
+/* The device keeps the newest CN_TRIP_CACHE drives. An older one would be invisible (never
+ * uploaded, never cleaned up), so it is removed from the card instead of filling it slowly. */
+static void forget_trip(cn_engine *e, const cn_trip_info *ti)
+{
+    static const char *const exts[] = {"cnl", "json"};
+    for (int k = 0; k < 2; k++) {
+        char *path = cn_trip_path(e, ti->id, exts[k]);
+        if (path) remove(path);
+        free(path);
+    }
+    if (!ti->uploaded_at && !ti->raw_deleted) cn_log(e, 'w', "Too many trips on the card: removed %s before it was uploaded", ti->id);
+}
+
 static void cache_insert(cn_engine *e, const cn_trip_info *ti)
 {
     int pos = 0;
     while (pos < e->ntrips && (e->trips[pos].start_wall > ti->start_wall ||
                                (e->trips[pos].start_wall == ti->start_wall && strcmp(e->trips[pos].id, ti->id) > 0)))
         pos++;
-    if (pos >= CN_TRIP_CACHE) return;
+    if (pos >= CN_TRIP_CACHE) {
+        forget_trip(e, ti);
+        return;
+    }
+    if (e->ntrips >= CN_TRIP_CACHE) forget_trip(e, &e->trips[CN_TRIP_CACHE - 1]);
     int n = e->ntrips < CN_TRIP_CACHE ? e->ntrips : CN_TRIP_CACHE - 1;
     memmove(&e->trips[pos + 1], &e->trips[pos], sizeof(cn_trip_info) * (size_t)(n - pos));
     e->trips[pos] = *ti;
     e->ntrips = n + 1;
 }
 
+static void trip_begin_locked(cn_engine *e);
+
+/* Trip operations come from several tasks (vehicle, web server during a firmware update,
+ * housekeeping before a restart), so each takes the engine's (recursive) lock. */
 void cn_trip_begin(cn_engine *e)
+{
+    tlock(e);
+    trip_begin_locked(e);
+    tunlock(e);
+}
+
+static void trip_begin_locked(cn_engine *e)
 {
     cn_trip *t = &e->trip;
     if (t->active) return;
@@ -202,31 +234,49 @@ void cn_trip_sample(cn_engine *e, int sig, double value, int64_t now_ms)
 {
     cn_trip *t = &e->trip;
     if (!t->active || !t->f) return;
+    tlock(e); /* the trip may be ended from another task (firmware update, restart) */
+    if (!t->active || !t->f) {
+        tunlock(e);
+        return;
+    }
     int n = fprintf(t->f, "%lld %d %.6g\n", (long long)(now_ms - t->start_mono), sig, value);
     if (n < 0) {
         cn_log(e, 'e', "Write to the SD card failed; recording stopped for this trip");
         fclose(t->f);
         t->f = NULL;
-        return;
+    } else {
+        t->bytes += (uint64_t)n;
+        t->samples++;
+        if (now_ms - t->last_flush_ms > 5000) {
+            t->last_flush_ms = now_ms;
+            fflush(t->f);
+            fsync(fileno(t->f));
+        }
     }
-    t->bytes += (uint64_t)n;
-    t->samples++;
-    if (now_ms - t->last_flush_ms > 5000) {
-        t->last_flush_ms = now_ms;
-        fflush(t->f);
-        fsync(fileno(t->f));
-    }
+    tunlock(e);
 }
 
 void cn_trip_event(cn_engine *e, const char *kind, const char *json)
 {
     cn_trip *t = &e->trip;
-    if (!t->active || !t->f) return;
-    int n = fprintf(t->f, "!%lld %s %s\n", (long long)(e->pf.mono_ms(e->pf.ctx) - t->start_mono), kind, json ? json : "{}");
-    if (n > 0) t->bytes += (uint64_t)n;
+    tlock(e);
+    if (t->active && t->f) {
+        int n = fprintf(t->f, "!%lld %s %s\n", (long long)(e->pf.mono_ms(e->pf.ctx) - t->start_mono), kind, json ? json : "{}");
+        if (n > 0) t->bytes += (uint64_t)n;
+    }
+    tunlock(e);
 }
 
+static void trip_end_locked(cn_engine *e, const char *reason);
+
 void cn_trip_end(cn_engine *e, const char *reason)
+{
+    tlock(e);
+    trip_end_locked(e, reason);
+    tunlock(e);
+}
+
+static void trip_end_locked(cn_engine *e, const char *reason)
 {
     cn_trip *t = &e->trip;
     if (!t->active) return;
@@ -330,26 +380,123 @@ static bool load_sidecar(const char *path, cn_trip_info *ti)
     return ti->id[0] != 0;
 }
 
+/* A raw log without a summary is a drive that never ended properly: the device lost power,
+ * crashed or was unplugged mid-drive. Finish it from what made it to the card, so it is uploaded
+ * and cleaned up like any other instead of sitting on the card forever. */
+static void recover_trip(cn_engine *e, const char *name)
+{
+    char id[sizeof(((cn_trip_info *)0)->id)];
+    size_t len = strlen(name) - 4;
+    if (len == 0 || len >= sizeof(id)) return;
+    memcpy(id, name, len);
+    id[len] = 0;
+    if (e->trip.active && !strcmp(id, e->trip.id)) return; /* still being written */
+    char *side = cn_trip_path(e, id, "json"), *raw = cn_trip_path(e, id, "cnl");
+    struct stat st;
+    if (!side || !raw || stat(side, &st) == 0) goto done;
+    FILE *f = fopen(raw, "rb");
+    if (!f) goto done;
+    cn_trip_info ti;
+    memset(&ti, 0, sizeof(ti));
+    cn_strlcpy(ti.id, id, sizeof(ti.id));
+    char line[256];
+    long long last_t = 0;
+    bool at_start = true, ends_nl = true;
+    while (fgets(line, sizeof(line), f)) {
+        size_t n = strlen(line);
+        if (at_start) {
+            if (!strncmp(line, "#start ", 7)) ti.start_wall = strtoll(line + 7, NULL, 10);
+            else if ((line[0] >= '0' && line[0] <= '9') || line[0] == '!') {
+                char *end;
+                long long t = strtoll(line + (line[0] == '!'), &end, 10);
+                if (end != line + (line[0] == '!') && *end == ' ' && t > last_t && t < 7LL * 86400 * 1000) last_t = t;
+                if (line[0] != '!' && n && line[n - 1] == '\n') ti.samples++;
+            }
+        }
+        ends_nl = n && line[n - 1] == '\n';
+        at_start = ends_nl;
+    }
+    fclose(f);
+    ti.duration_s = (int)(last_t / 1000);
+    if (ti.start_wall < 0) ti.start_wall = 0;
+    if (ti.duration_s < MIN_TRIP_S || ti.samples < MIN_TRIP_SAMPLES) {
+        remove(raw);
+        goto done;
+    }
+    cn_buf b;
+    cn_buf_init(&b);
+    cn_jw w;
+    cn_jw_init(&w, &b);
+    cn_jw_obj(&w);
+    cn_jw_kstr(&w, "id", ti.id);
+    cn_jw_kint(&w, "start", ti.start_wall);
+    cn_jw_kint(&w, "duration_s", ti.duration_s);
+    cn_jw_kint(&w, "samples", ti.samples);
+    cn_jw_kstr(&w, "device", e->device_id);
+    cn_jw_kstr(&w, "reason", "power lost");
+    cn_jw_end_obj(&w);
+    char *sum = cn_buf_take(&b);
+    f = sum ? fopen(raw, "ab") : NULL;
+    if (f) {
+        fprintf(f, "%s!%lld end %s\n", ends_nl ? "" : "\n", last_t, sum);
+        fflush(f);
+        ti.bytes = (uint64_t)ftell(f);
+        fsync(fileno(f));
+        fclose(f);
+        cn_buf_init(&b);
+        cn_jw_init(&w, &b);
+        cn_jw_obj(&w);
+        cn_jw_kstr(&w, "id", ti.id);
+        cn_jw_kint(&w, "start", ti.start_wall);
+        cn_jw_kint(&w, "duration_s", ti.duration_s);
+        cn_jw_kint(&w, "samples", ti.samples);
+        cn_jw_kint(&w, "bytes", (long long)ti.bytes);
+        cn_jw_kstr(&w, "device", e->device_id);
+        cn_jw_kstr(&w, "reason", "power lost");
+        cn_jw_kstr(&w, "worst", cn_sev_name(CN_SEV_NODATA));
+        cn_jw_kint(&w, "uploaded_bytes", 0);
+        cn_jw_kint(&w, "uploaded_at", 0);
+        cn_jw_kbool(&w, "raw_deleted", false);
+        cn_jw_end_obj(&w);
+        char *side_json = cn_buf_take(&b);
+        if (side_json && cn_write_file(side, side_json, strlen(side_json)) == 0)
+            cn_log(e, 'w', "Trip %s was cut short by a power loss; kept %d min of it", ti.id, ti.duration_s / 60);
+        free(side_json);
+    }
+    free(sum);
+done:
+    free(side);
+    free(raw);
+}
+
 void cn_trips_scan(cn_engine *e)
 {
+    tlock(e);
     e->ntrips = 0;
     const char *dir = data_dir(e);
-    if (!dir) return;
     char logs[160];
-    snprintf(logs, sizeof(logs), "%s/logs", dir);
-    DIR *d = opendir(logs);
-    if (!d) return;
-    struct dirent *de;
-    while ((de = readdir(d))) {
-        size_t n = strlen(de->d_name);
-        if (n < 6 || strcmp(de->d_name + n - 5, ".json") != 0) continue;
-        char path[440];
-        snprintf(path, sizeof(path), "%s/%s", logs, de->d_name);
-        cn_trip_info ti;
-        if (load_sidecar(path, &ti)) cache_insert(e, &ti);
+    snprintf(logs, sizeof(logs), "%s/logs", dir ? dir : "");
+    DIR *d = dir ? opendir(logs) : NULL;
+    if (d) {
+        /* first finish any drive that never ended, then read every summary */
+        struct dirent *de;
+        while ((de = readdir(d))) {
+            size_t n = strlen(de->d_name);
+            if (n > 4 && !strcmp(de->d_name + n - 4, ".cnl")) recover_trip(e, de->d_name);
+        }
+        rewinddir(d);
+        while ((de = readdir(d))) {
+            size_t n = strlen(de->d_name);
+            if (n < 6 || strcmp(de->d_name + n - 5, ".json") != 0) continue;
+            char path[440];
+            snprintf(path, sizeof(path), "%s/%s", logs, de->d_name);
+            cn_trip_info ti;
+            if (load_sidecar(path, &ti)) cache_insert(e, &ti);
+        }
+        closedir(d);
     }
-    closedir(d);
     if (e->ntrips) cn_strlcpy(e->last_trip_id, e->trips[0].id, sizeof(e->last_trip_id));
+    tunlock(e);
 }
 
 static void patch_sidecar(cn_engine *e, const cn_trip_info *ti)
@@ -380,6 +527,8 @@ static void patch_sidecar(cn_engine *e, const cn_trip_info *ti)
 
 int cn_trip_mark_uploaded(cn_engine *e, const char *trip_id, uint64_t bytes, bool complete)
 {
+    int rc = -1;
+    tlock(e); /* the sync task calls this while the vehicle task may add a trip */
     for (int i = 0; i < e->ntrips; i++) {
         cn_trip_info *ti = &e->trips[i];
         if (strcmp(ti->id, trip_id) != 0) continue;
@@ -389,15 +538,18 @@ int cn_trip_mark_uploaded(cn_engine *e, const char *trip_id, uint64_t bytes, boo
             ti->uploaded_at = wall > 0 ? wall : 1;
         }
         patch_sidecar(e, ti);
-        return 0;
+        rc = 0;
+        break;
     }
-    return -1;
+    tunlock(e);
+    return rc;
 }
 
 /* Raw logs are removed once the server has had them for retention_days.
  * If the card is nearly full, the oldest raw logs go first, uploaded ones before the rest. */
 void cn_trips_retention(cn_engine *e)
 {
+    tlock(e);
     int64_t wall = e->pf.wall_s(e->pf.ctx);
     int removed = 0;
     for (int i = 0; i < e->ntrips && wall > 0; i++) {
@@ -420,6 +572,7 @@ void cn_trips_retention(cn_engine *e)
                 cn_trip_info *ti = &e->trips[i];
                 if (ti->raw_deleted || (pass == 0 && !ti->uploaded_at)) continue;
                 if (e->trip.active && !strcmp(ti->id, e->trip.id)) continue;
+                if (!strcmp(ti->id, e->sync.uploading)) continue; /* being sent right now */
                 char *path = cn_trip_path(e, ti->id, "cnl");
                 if (path) {
                     remove(path);
@@ -434,16 +587,22 @@ void cn_trips_retention(cn_engine *e)
         }
     }
     if (removed) cn_log(e, 'i', "Removed %d raw trip log%s from the SD card", removed, removed == 1 ? "" : "s");
+    tunlock(e);
 }
 
 void cn_trips_fix_clock(cn_engine *e)
 {
+    tlock(e);
     int64_t wall = e->pf.wall_s(e->pf.ctx), now = e->pf.mono_ms(e->pf.ctx);
-    if (wall < 1700000000) return;
+    if (wall < 1700000000) {
+        tunlock(e);
+        return;
+    }
     for (int i = 0; i < e->ntrips; i++) {
         cn_trip_info *ti = &e->trips[i];
         if (ti->start_wall > 0 || !ti->end_mono) continue;
         ti->start_wall = wall - (now - ti->end_mono) / 1000 - ti->duration_s;
         patch_sidecar(e, ti);
     }
+    tunlock(e);
 }

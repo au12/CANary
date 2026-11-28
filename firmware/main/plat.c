@@ -104,11 +104,18 @@ static int p_can_send(void *ctx, const cn_can_frame *f)
     m.extd = f->ext ? 1 : 0;
     m.ss = 1; /* single shot: never keep hammering a bus that does not acknowledge */
     memcpy(m.data, f->data, 8);
-    uint32_t alerts;
-    twai_read_alerts(&alerts, 0); /* clear stale */
-    if (twai_transmit(&m, pdMS_TO_TICKS(30)) != ESP_OK) return -1;
-    if (twai_read_alerts(&alerts, pdMS_TO_TICKS(25)) != ESP_OK) return -1;
-    return (alerts & TWAI_ALERT_TX_SUCCESS) ? 0 : -1;
+    /* Single shot gives up when it loses arbitration to another module talking at the same
+     * moment, which on a busy bus happens now and then; try a couple more times before calling
+     * the request failed. A bus that never acknowledges costs at most three short waits. */
+    for (int attempt = 0; attempt < 3; attempt++) {
+        uint32_t alerts = 0;
+        twai_read_alerts(&alerts, 0); /* clear stale */
+        if (twai_transmit(&m, pdMS_TO_TICKS(30)) != ESP_OK) return -1;
+        if (twai_read_alerts(&alerts, pdMS_TO_TICKS(25)) != ESP_OK) continue;
+        if (alerts & TWAI_ALERT_TX_SUCCESS) return 0;
+        if (alerts & TWAI_ALERT_BUS_OFF) return -1;
+    }
+    return -1;
 }
 
 static int p_can_recv(void *ctx, cn_can_frame *f, int timeout_ms)

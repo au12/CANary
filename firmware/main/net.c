@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "mdns.h"
+#include "nvs.h"
 
 #include <string.h>
 #include <sys/time.h>
@@ -24,20 +25,60 @@ static const char *TAG = "net";
 static esp_netif_t *s_sta_if, *s_ap_if;
 static bool s_started, s_connected, s_connecting, s_ap_on, s_ever_connected, s_sntp_started, s_mdns_started;
 static char s_ip[20], s_ssid[33], s_ap_ssid[33];
-static int s_rssi, s_fails, s_ap_clients;
+static int s_rssi, s_fails, s_ap_clients, s_blind;
 static int64_t s_ap_until_ms, s_next_try_ms, s_connect_started_ms;
 static uint32_t s_cfg_gen = 0xFFFFFFFF;
 static wifi_mode_t s_mode = WIFI_MODE_NULL;
 
 static int64_t now_ms(void) { return esp_timer_get_time() / 1000; }
 
-static void on_time_sync(struct timeval *tv)
+/* Runs in the network stack's own task with a small stack: only note the time here, and let
+ * net_poll (sync task) write the clock chip and fix up undated drives on the SD card. */
+static volatile int64_t s_synced_s;
+
+static void on_time_sync(struct timeval *tv) { s_synced_s = tv->tv_sec; }
+
+static void after_time_sync(void)
 {
-    bsp_rtc_write(tv->tv_sec);
+    if (!s_synced_s) return;
+    s_synced_s = 0;
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    bsp_rtc_write(now.tv_sec);
     if (g_engine) {
         g_engine->pf.lock(g_engine->pf.ctx);
         cn_trips_fix_clock(g_engine);
         g_engine->pf.unlock(g_engine->pf.ctx);
+    }
+}
+
+/* Whether any of the configured networks has ever been joined, remembered across restarts, so the
+ * rescue access point opens after a password mistake but not on every drive away from home. */
+static int s_wifi_ok = -1;
+
+static bool wifi_ok_get(void)
+{
+    if (s_wifi_ok < 0) {
+        uint8_t v = 0;
+        nvs_handle_t h;
+        if (nvs_open("canary", NVS_READONLY, &h) == ESP_OK) {
+            nvs_get_u8(h, "wifi_ok", &v);
+            nvs_close(h);
+        }
+        s_wifi_ok = v;
+    }
+    return s_wifi_ok == 1;
+}
+
+static void wifi_ok_set(bool ok)
+{
+    if (s_wifi_ok == (ok ? 1 : 0)) return;
+    s_wifi_ok = ok ? 1 : 0;
+    nvs_handle_t h;
+    if (nvs_open("canary", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "wifi_ok", ok ? 1 : 0);
+        nvs_commit(h);
+        nvs_close(h);
     }
 }
 
@@ -47,9 +88,16 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connected = false;
         s_connecting = false;
         s_ip[0] = 0;
-        s_fails++;
-        int backoff = s_fails < 3 ? 5000 : s_fails < 6 ? 15000 : 45000;
-        s_next_try_ms = now_ms() + backoff;
+        const wifi_event_sta_disconnected_t *ev = data;
+        int reason = ev ? ev->reason : 0;
+        if (reason == WIFI_REASON_NO_AP_FOUND || (reason >= WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY && reason <= WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD)) {
+            /* not there (usually a look for a hidden network while away): no reason to back off */
+            s_next_try_ms = now_ms() + 20000;
+        } else {
+            s_fails++;
+            int backoff = s_fails < 3 ? 5000 : s_fails < 6 ? 15000 : 45000;
+            s_next_try_ms = now_ms() + backoff;
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *ev = data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
@@ -57,6 +105,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connecting = false;
         s_ever_connected = true;
         s_fails = 0;
+        s_blind = 0;
         if (!s_sntp_started) {
             esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
             cfg.sync_cb = on_time_sync;
@@ -85,16 +134,24 @@ static void dns_task(void *arg)
         socklen_t fl = sizeof(from);
         int n = recvfrom(fd, buf, sizeof(buf) - 16, 0, (struct sockaddr *)&from, &fl);
         if (n < 12 || !s_ap_on) continue;
-        /* only answer clients of our own access point */
+        /* only answer clients of our own access point, and only plain queries with one question */
         if ((ntohl(from.sin_addr.s_addr) & 0xFFFFFF00u) != 0xC0A80400u) continue;
-        buf[2] = 0x81; /* response, recursion desired */
-        buf[3] = 0x80;
+        if ((buf[2] & 0x80) || buf[4] != 0 || buf[5] != 1) continue;
+        /* find the end of the question: the name, then type and class. Anything after it (an EDNS
+         * record, which phones add) is dropped, or the answer would land in the wrong place. */
+        int q = 12;
+        while (q < n && buf[q] != 0 && (buf[q] & 0xC0) == 0) q += buf[q] + 1;
+        if (q >= n || buf[q] != 0 || q + 5 > n) continue;
+        int qend = q + 5;
+        bool type_a = buf[q + 1] == 0 && buf[q + 2] == 1;
+        buf[2] = 0x84 | (buf[2] & 0x01); /* response, authoritative, keep "recursion desired" */
+        buf[3] = 0x00;
         buf[6] = 0;
-        buf[7] = 1; /* one answer */
+        buf[7] = type_a ? 1 : 0; /* other types (AAAA, HTTPS) get an empty answer, not a wrong one */
         buf[8] = buf[9] = buf[10] = buf[11] = 0;
         static const uint8_t answer[16] = {0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x1E, 0x00, 0x04, 192, 168, 4, 1};
-        memcpy(buf + n, answer, sizeof(answer));
-        sendto(fd, buf, n + sizeof(answer), 0, (struct sockaddr *)&from, fl);
+        if (type_a) memcpy(buf + qend, answer, sizeof(answer));
+        sendto(fd, buf, qend + (type_a ? sizeof(answer) : 0), 0, (struct sockaddr *)&from, fl);
     }
 }
 
@@ -135,6 +192,7 @@ static void configure_ap(const char *pass)
 /* Scan and join the strongest network we have a password for. */
 static void try_connect(const cn_wifi_net *nets, int n)
 {
+    int best = -1, best_rssi = -127;
     wifi_scan_config_t sc = {.show_hidden = false, .scan_type = WIFI_SCAN_TYPE_ACTIVE, .scan_time.active = {.min = 60, .max = 110}};
     if (esp_wifi_scan_start(&sc, true) != ESP_OK) {
         s_next_try_ms = now_ms() + 10000;
@@ -143,14 +201,17 @@ static void try_connect(const cn_wifi_net *nets, int n)
     uint16_t count = 24;
     static wifi_ap_record_t recs[24];
     if (esp_wifi_scan_get_ap_records(&count, recs) != ESP_OK) count = 0;
-    int best = -1, best_rssi = -127;
     for (int i = 0; i < count; i++)
         for (int k = 0; k < n; k++)
             if (!strcmp((const char *)recs[i].ssid, nets[k].ssid) && recs[i].rssi > best_rssi) {
                 best = k;
                 best_rssi = recs[i].rssi;
             }
-    if (best < 0) {
+    if (best < 0 && (s_blind++ % 3) == 2) {
+        /* A hidden network never shows its name in a scan. Now and then ask for one of ours by name;
+         * if it is not there this fails within a few seconds. */
+        best = (s_blind / 3) % n;
+    } else if (best < 0) {
         /* nothing known in range (out on the road): look again later, less often if someone is using the access point */
         s_next_try_ms = now_ms() + (s_ap_clients ? 90000 : 20000);
         return;
@@ -162,6 +223,7 @@ static void try_connect(const cn_wifi_net *nets, int n)
     sta.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     sta.sta.threshold.authmode = nets[best].pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
     sta.sta.pmf_cfg.capable = true;
+    sta.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH; /* WPA3 routers that only offer hash-to-element */
     esp_wifi_set_config(WIFI_IF_STA, &sta);
     strlcpy(s_ssid, nets[best].ssid, sizeof(s_ssid));
     s_connecting = true;
@@ -191,7 +253,7 @@ void net_poll(void)
     }
     int64_t now = now_ms();
     /* Rescue: networks are configured but none has ever worked since boot, so offer the access point for a while. */
-    bool rescue = n > 0 && !s_ever_connected && now > 75000 && now < 75000 + 10 * 60000;
+    bool rescue = n > 0 && !s_ever_connected && !wifi_ok_get() && now > 75000 && now < 75000 + 10 * 60000;
     /* never pull the access point out from under someone who is using it */
     bool want_ap = g_recovery || n == 0 || ap_mode == 1 || now < s_ap_until_ms || rescue || (s_ap_on && s_ap_clients > 0);
     wifi_mode_t mode = want_ap ? WIFI_MODE_APSTA : WIFI_MODE_STA;
@@ -207,6 +269,15 @@ void net_poll(void)
         } else if (mode != s_mode) {
             esp_wifi_set_mode(mode);
             if (want_ap) configure_ap(ap_pass);
+        }
+        if (cfg_changed && s_cfg_gen != 0xFFFFFFFF) {
+            /* a changed list of networks has to prove itself again before the rescue access point stops opening */
+            static uint32_t s_nets_sig;
+            uint32_t sig = 2166136261u;
+            for (int k = 0; k < n; k++)
+                for (const char *c = nets[k].ssid; *c; c++) sig = (sig ^ (uint8_t)*c) * 16777619u;
+            if (s_nets_sig && sig != s_nets_sig && !s_connected) wifi_ok_set(false);
+            s_nets_sig = sig;
         }
         if (cfg_changed && s_cfg_gen != 0xFFFFFFFF && (s_connected || s_connecting)) {
             /* settings changed: drop the link and choose again */
@@ -233,6 +304,8 @@ void net_poll(void)
         esp_wifi_disconnect();
     }
     if (n > 0 && !g_recovery && !s_connected && !s_connecting && now >= s_next_try_ms) try_connect(nets, n);
+    after_time_sync();
+    if (s_connected && !wifi_ok_get()) wifi_ok_set(true);
     if (s_connected) {
         wifi_ap_record_t ap;
         if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) s_rssi = ap.rssi;

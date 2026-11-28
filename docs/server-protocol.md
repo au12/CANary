@@ -67,7 +67,7 @@ The body describes the device and the car as they are now. A server uses what it
 Reply:
 
 ```json
-{ "ok": true, "have_profile": false, "time": 1795412906,
+{ "ok": true, "have_profile": false, "time": 1795412906, "tz_offset_min": -300,
   "odometer": { "recorded": true, "value": 103002, "unit": "mi" } }
 ```
 
@@ -76,6 +76,7 @@ Reply:
 | `have_profile` | `false` asks the device to upload the profile named in the check-in |
 | `time` | The server's clock in Unix seconds. The device also reads the `Date` header. Either sets the device's clock if it has none. |
 | `odometer` | What the server did with the reading, shown to the user |
+| `tz_offset_min` | Optional. The server's offset from UTC today, in minutes. Sent only by a server that knows its time zone; the device adopts it, which keeps local dates right across daylight saving changes. |
 
 ### `PUT /api/canary/profile?hash=H`
 

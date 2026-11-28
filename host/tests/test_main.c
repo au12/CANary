@@ -816,9 +816,9 @@ static void test_clock_and_errors(void)
     g_test = "config";
     cn_config_from_json(&c, "{\"wifi\":{\"networks\":[{\"ssid\":\"home\",\"pass\":\"hunter22\"}]},\"glovebox\":{\"url\":\"http://x/\",\"api_key\":\"k\"}}");
     CHECK(c.nwifi == 1 && !strcmp(c.wifi[0].pass, "hunter22") && !strcmp(c.gb_url, "http://x"));
-    cn_config_from_json(&c, "{\"wifi\":{\"networks\":[{\"ssid\":\"home\"},{\"ssid\":\"shop\",\"pass\":\"abc\"}]},\"power\":{\"sleep_voltage\":99}}");
+    cn_config_from_json(&c, "{\"wifi\":{\"networks\":[{\"ssid\":\"home\"},{\"ssid\":\"shop\",\"pass\":\"abc\"}]},\"power\":{\"sleep_voltage\":99,\"wake_voltage\":20}}");
     CHECK(c.nwifi == 2 && !strcmp(c.wifi[0].pass, "hunter22") && !strcmp(c.wifi[1].pass, "abc"));
-    CHECK(c.sleep_voltage == 14.5 && c.wake_voltage > c.sleep_voltage);
+    CHECK(c.sleep_voltage == 14.5 && c.wake_voltage == 14.4);
     char *red = cn_config_to_json(&c, true), *full = cn_config_to_json(&c, false);
     CHECK(!strstr(red, "hunter22") && strstr(full, "hunter22") && strstr(red, "\"pass_set\":true"));
     cn_config c2;
@@ -829,10 +829,72 @@ static void test_clock_and_errors(void)
     free(full);
 }
 
+static void test_power_loss(void)
+{
+    g_test = "power loss";
+    rig r;
+    rig_start(&r, "powerloss", NULL, 12, true);
+    if (!r.e) return;
+    rig_run(&r, 6 * 60, true);
+    CHECK(r.e->trip.active && r.e->trip.f && r.e->ntrips == 0);
+    char id[40];
+    cn_strlcpy(id, r.e->trip.id, sizeof(id));
+    /* the power goes: the file stops mid-line and nothing in memory survives */
+    fflush(r.e->trip.f);
+    fclose(r.e->trip.f);
+    r.e->trip.f = NULL;
+    r.e->trip.active = false;
+    char *raw = cn_trip_path(r.e, id, "cnl");
+    FILE *f = fopen(raw, "ab");
+    fputs("312345 3 1.", f);
+    fclose(f);
+    /* a drive too short to keep is just removed */
+    char *tiny = cn_trip_path(r.e, "20260101T000000Z-beef", "cnl");
+    f = fopen(tiny, "wb");
+    fputs("#CNL 1\n#trip 20260101T000000Z-beef\n#start 1767225600\n0 0 800\n500 0 810\n", f);
+    fclose(f);
+
+    cn_trips_scan(r.e);
+    CHECK(access(tiny, F_OK) != 0);
+    CHECK(r.e->ntrips == 1 && !strcmp(r.e->trips[0].id, id));
+    const cn_trip_info *ti = &r.e->trips[0];
+    CHECK(ti->duration_s > 200 && ti->duration_s < 6 * 60 && ti->samples > 1000 && ti->start_wall > 1700000000);
+    CHECK(!ti->uploaded_at && !ti->raw_deleted);
+    size_t len = 0;
+    char *log = cn_read_file(raw, &len);
+    CHECK(log && len == ti->bytes);
+    CHECK(log && strstr(log, "312345 3 1.\n!") && strstr(log, "\"reason\":\"power lost\"}\n"));
+    free(log);
+    /* scanning again changes nothing */
+    cn_trips_scan(r.e);
+    CHECK(r.e->ntrips == 1 && r.e->trips[0].bytes == len);
+
+    /* past the limit on remembered trips, the oldest are removed rather than left on the card */
+    for (int i = 0; i < CN_TRIP_CACHE + 2; i++) {
+        char tid[40], json[200];
+        snprintf(tid, sizeof(tid), "20250101T0000%02dZ-%04x", i % 60, i);
+        snprintf(json, sizeof(json), "{\"id\":\"%s\",\"start\":%d,\"duration_s\":600,\"bytes\":10,\"uploaded_at\":1735700000,\"raw_deleted\":true}",
+                 tid, 1735689600 + i * 3600);
+        char *p = cn_trip_path(r.e, tid, "json");
+        cn_write_file(p, json, strlen(json));
+        free(p);
+    }
+    cn_trips_scan(r.e);
+    CHECK(r.e->ntrips == CN_TRIP_CACHE && !strcmp(r.e->trips[0].id, id));
+    char *oldest = cn_trip_path(r.e, "20250101T000000Z-0000", "json"), *kept = cn_trip_path(r.e, "20250101T000003Z-0003", "json");
+    CHECK(access(oldest, F_OK) != 0 && access(kept, F_OK) == 0);
+    free(oldest);
+    free(kept);
+    free(raw);
+    free(tiny);
+    rig_stop(&r);
+}
+
 int main(void)
 {
     static void (*const tests[])(void) = {test_util, test_bits_and_dtcs, test_expr, test_profiles, test_monitor_math,
-                                          test_healthy_drive, test_faulty_drive, test_generic_car, test_clock_and_errors};
+                                          test_healthy_drive, test_faulty_drive, test_generic_car, test_clock_and_errors,
+                                          test_power_loss};
     FILE *quiet = freopen("/dev/null", "w", stderr); /* engine log chatter */
     (void)quiet;
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {

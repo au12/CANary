@@ -97,12 +97,12 @@ and `unavailable` (the car does not report something the check needs; `why` name
   "glovebox": { "url": "http://192.168.1.20:8080", "vehicle_id": 1, "upload_logs": true,
                 "odometer_unit": "mi", "odometer_offset": 0 },
   "vehicle":  { "profile": "auto" },
-  "power":    { "sleep_enabled": true, "sleep_voltage": 13.0, "wake_voltage": 13.3, "sleep_delay_s": 300 },
+  "power":    { "sleep_enabled": true, "wake_voltage": 13.3, "sleep_delay_s": 300 },
   "log":      { "enabled": true, "retention_days": 7 }
 }
 ```
 
-`wifi.ap_mode` is `0` to run the device's own network only when no known network is in range
+`power.wake_voltage` is kept between 12.8 and 14.4 V. `wifi.ap_mode` is `0` to run the device's own network only when no known network is in range
 and `1` to keep it on. `vehicle.profile` is `auto` or a profile id. `glovebox.odometer_unit`
 and `odometer_offset` apply only to a plain LubeLogger server.
 

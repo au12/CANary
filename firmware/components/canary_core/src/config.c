@@ -122,9 +122,11 @@ bool cn_config_from_json(cn_config *c, const char *json)
     if (cJSON_IsObject(pw)) {
         get_bool(pw, "sleep_enabled", &c->sleep_enabled);
         get_dbl(pw, "sleep_voltage", &c->sleep_voltage, 11.5, 14.5);
-        get_dbl(pw, "wake_voltage", &c->wake_voltage, 12.0, 15.0);
+        /* Below a resting battery (about 12.6 V) it would never sleep; above 14.4 a healthy
+         * charging system might never reach it. The old "sleep_voltage" key is still read and
+         * saved so older settings round-trip, but sleep is decided by the voltage trend. */
+        get_dbl(pw, "wake_voltage", &c->wake_voltage, 12.8, 14.4);
         get_int(pw, "sleep_delay_s", &c->sleep_delay_s, 60, 3600);
-        if (c->wake_voltage < c->sleep_voltage + 0.1) c->wake_voltage = c->sleep_voltage + 0.1;
     }
     const cJSON *lg = cJSON_GetObjectItemCaseSensitive(doc, "log");
     if (cJSON_IsObject(lg)) {

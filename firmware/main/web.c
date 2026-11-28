@@ -43,9 +43,9 @@ static void json_error(httpd_req_t *req, const char *status, const char *msg)
 static bool authorized(httpd_req_t *req)
 {
     if (!g_engine || !g_engine->cfg.ui_password[0]) return true;
-    char hdr[160];
+    char hdr[256];
     if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) == ESP_OK && !strncmp(hdr, "Basic ", 6)) {
-        unsigned char dec[120];
+        unsigned char dec[192]; /* "name:password": a long remembered user name must not lock anyone out */
         size_t n = 0;
         if (mbedtls_base64_decode(dec, sizeof(dec) - 1, &n, (const unsigned char *)hdr + 6, strlen(hdr + 6)) == 0) {
             dec[n] = 0;
@@ -93,11 +93,15 @@ static esp_err_t handle_ota(httpd_req_t *req)
     if (!error && (size_t)req->content_len > part->size) error = "firmware is too large for this device";
     if (!error && g_engine && g_engine->trip.active) cn_trip_end(g_engine, "firmware update");
     if (!error && esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &h) != ESP_OK) error = "could not start the update";
-    int remaining = req->content_len;
+    int remaining = req->content_len, stalls = 0;
     bool first = true;
     while (!error && remaining > 0) {
         int n = httpd_req_recv(req, buf, MIN(remaining, 4096));
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++stalls > 3) error = "upload interrupted";
+            continue;
+        }
+        stalls = 0;
         if (n <= 0) {
             error = "upload interrupted";
             break;
@@ -197,10 +201,10 @@ static esp_err_t handle_api(httpd_req_t *req, const char *path, const char *quer
             return ESP_OK;
         }
         body = malloc(req->content_len + 1);
-        int got = 0;
+        int got = 0, stalls = 0;
         while (body && got < (int)req->content_len) {
             int n = httpd_req_recv(req, body + got, req->content_len - got);
-            if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            if (n == HTTPD_SOCK_ERR_TIMEOUT && ++stalls <= 3) continue;
             if (n <= 0) break;
             got += n;
         }
@@ -287,7 +291,8 @@ static esp_err_t handler(httpd_req_t *req)
     /* unknown paths get the app (client-side routing) */
     if (!strchr(want, '.')) {
         httpd_resp_set_type(req, g_web_assets[0].type);
-        httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+        if (g_web_assets[0].gzip) httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
         return httpd_resp_send(req, (const char *)g_web_assets[0].data, (ssize_t)g_web_assets[0].len);
     }
     httpd_resp_send_404(req);

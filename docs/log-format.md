@@ -118,7 +118,7 @@ still valid up to its last complete line. Readers should ignore event kinds they
 | `fuel_l` | Integrated from the fuel rate, when the car reports one |
 | `max_speed` | km/h |
 | `samples`, `bytes` | Lines and size of the recording |
-| `reason` | Why the drive ended: `ignition off`, `engine off`, `restart`, `firmware update`, … |
+| `reason` | Why the drive ended: `ignition off`, `engine off`, `restart`, `firmware update`, … or `power lost` for a drive the device finished after it restarts: such a log has no summary of its own until then, and its `end` line and summary carry only the id, start, length and sample count; the server works out the rest from the samples. |
 | `worst` | The most serious verdict: `ok`, `advisory`, `warning`, `critical`, or `nodata` |
 | `findings` | Every check that reached a verdict. `status` is the verdict, `value` the figure in the profile's unit, `text` the sentence in metric units and `tpl` the same sentence with `{value}` left open so a reader can use its own units. |
 | `signals` | Lowest, highest and average value of each signal, and how many readings there were |

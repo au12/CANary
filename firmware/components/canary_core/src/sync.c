@@ -214,7 +214,21 @@ static bool checkin(cn_engine *e, bool *have_profile)
             cn_log(e, 'i', "Odometer recorded by the server: %.0f %s", cJSON_IsNumber(v) ? v->valuedouble : 0,
                    cJSON_IsString(u) ? u->valuestring : "");
         }
+        /* A server that knows its time zone says what the offset is today, which keeps the device
+         * right across daylight saving changes without anyone opening its page. */
+        const cJSON *tz = cJSON_GetObjectItemCaseSensitive(d, "tz_offset_min");
+        bool tz_changed = false;
+        if (cJSON_IsNumber(tz) && fabs(tz->valuedouble) <= 900) {
+            lock(e);
+            tz_changed = e->cfg.tz_offset_min != (int)tz->valuedouble;
+            e->cfg.tz_offset_min = (int)tz->valuedouble;
+            unlock(e);
+        }
         cJSON_Delete(d);
+        if (tz_changed) {
+            cn_log(e, 'i', "Time zone offset is now %d min (from the server)", e->cfg.tz_offset_min);
+            cn_engine_save_config(e);
+        }
     } else {
         set_error(e, "check-in: %s", explain(e, st, &r));
     }

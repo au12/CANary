@@ -133,7 +133,11 @@ static void housekeeping_task(void *arg)
         }
         if (g_engine->format_requested) {
             g_engine->format_requested = false;
+            /* close the drive being recorded first: formatting under an open file corrupts the card */
+            g_engine->pf.lock(g_engine->pf.ctx);
+            if (g_engine->trip.active) cn_trip_end(g_engine, "SD card formatted");
             bool ok = sd_format();
+            g_engine->pf.unlock(g_engine->pf.ctx);
             cn_trips_scan(g_engine);
             cn_log(g_engine, ok ? 'i' : 'e', ok ? "SD card formatted" : "SD card format failed");
         }
